@@ -48,6 +48,12 @@
 
 #include <responses.h>
 #include <linearhdr.h>
+#include <fstream>
+#include <sstream>
+
+#ifdef NETPBM_FOUND
+#include <ppmio.h>
+#endif
 
 using namespace std;
 
@@ -76,13 +82,10 @@ inline float max(float a, float b, float c, float d) {
 struct FrameInfo {float etime; float iso; float aperture; float factor;};
 
 inline FrameInfo frame_info(pfs::Frame *frame, float scale){
-    FrameInfo result = {1.f, 100.f, 1.f, 0.f};
+    FrameInfo result = {1.f, 100.f, 1.f, 1.f};
 
     const char *etime_str =
             frame->getTags()->getString("exposure_time");
-
-    if (etime_str == nullptr)
-        throw pfs::Exception("missing exposure information in the PFS stream (use pfsinhdrgen to input files)");
 
     result.etime = atof(etime_str);
 
@@ -110,22 +113,18 @@ class QuietException {
 
 void printHelp() {
     fprintf(stderr, PROG_NAME ": \n"
-                    "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.01\n"
-                    "\t[--range, -r <val>]: dynamic range of single raw exposure, used to set lower cutoff, give as power of 2\n"
+                    "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.2\n"
+                    "\t[--range, -r <val>]: dynamic range of single raw exposure, used to set lower cutoff, give as power of 2 default=6.64386\n"
                     "\t[--deghosting, -d <val>]: relative difference for outlier detection when less than 1, otherwise absolute difference (good for clouds) default=OFF\n"
                     "\t[--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak, do not use with large files!\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0 \n"
-                    "\t[--use-yxy, -X]: merge hdr in Yxy space\n"
+                    "\t[--use-yxy, -X]: merge hdr in Yxy space instead of RGB\n"
                     "\t[--cull, -c]: reduce number of input exposures used\n"
                     "\t[--verbose, -v] [--help]\n");
 }
 
-
 void pfshdrraw(int argc, char *argv[]) {
 
-    /* ------------------------------------------------------------------------------------------------ */
-    /* -------------------------------- initialization start ------------------------------------------ */
-    /* ------------------------------------------------------------------------------------------------ */
 
     pfs::DOMIO pfsio;
 
@@ -204,6 +203,10 @@ void pfshdrraw(int argc, char *argv[]) {
                 throw QuietException();
         }
     }
+    bool fromfile = argv[optind] != nullptr;
+
+    std::ifstream infile(argv[optind]);
+
 
     /* ------------------------------------------------------------------------------------------------ */
     /* -------------------------------- initialization done ------------------------------------------- */
@@ -231,18 +234,46 @@ void pfshdrraw(int argc, char *argv[]) {
 
     pfs::ColorSpace hdr_target = yxy ? pfs::CS_Yxy : pfs::CS_RGB;
 
-
-
     while (true) {
-
         pmax = 0;
-        pfs::Frame *iframe = pfsio.readFrame(stdin);
-        if (iframe == nullptr)
-            break; // No more frames
+        pfs::Frame *iframe = nullptr;
+        FrameInfo info = {1.f, 100.f, 1.f, 1.f};
+
+        if (!fromfile){
+            iframe = pfsio.readFrame(stdin);
+//            info = frame_info(iframe, opt_scale);
+            if (iframe == nullptr)
+                break; // No more frames
+        } else {
+            std::string line, framefile;
+            if (std::getline(infile, line)) {
+                std::istringstream iss(line);
+                if (!(iss >> framefile >> info.iso >> info.aperture >> info.etime)) { continue;}
+                info.factor = opt_scale * 100.0f * info.aperture * info.aperture / ( info.iso * info.etime );
+
+                FILE *fh = fopen( framefile.c_str(), "rb");
+                pfs::FrameFile ff = pfs::FrameFile( fh, framefile.c_str());
+                #ifdef NETPBM_FOUND
+                PPMReader reader( "pfshdrraw", ff.fh );
+                iframe = pfsio.createFrame( reader.getWidth(), reader.getHeight() );
+                pfs::Channel *X, *Y, *Z;
+                iframe->createXYZChannels( X, Y, Z );
+
+                //Store sRGB data temporarily in XYZ channels
+                reader.readImage( X, Y, Z );
+                pfs::transformColorSpace( pfs::CS_RGB, X, Y, Z, pfs::CS_XYZ, X, Y, Z );
+                #else
+                throw pfs::Exception("linearhdr compiled without ppm support use pfsin to load files");
+                #endif
+
+
+            } else
+                break; //no more lines
+        }
 
         if (keep || oorange) {
-
-            FrameInfo info = frame_info(iframe, opt_scale);
+            if (!fromfile)
+                info = frame_info(iframe, opt_scale);
 
             pfs::Channel *X = nullptr;
             pfs::Channel *Y = nullptr;
@@ -319,11 +350,10 @@ void pfshdrraw(int argc, char *argv[]) {
         oorange = oorange && (pmax > 1 - opt_saturation_offset_perc);
         pfsio.freeFrame(iframe);
     }
-
     if (dataonly)
         return;
-
     if (frame_no < 1)
+
         throw pfs::Exception("at least one image required for calibration (check paths in hdrgen script?)");
 
     VERBOSE_STR << "using " << frame_no  << " frames, range min:" << gmin << ", max:" << gmax <<  endl;

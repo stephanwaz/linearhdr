@@ -15,8 +15,7 @@
 /* Version number of package */
 //#undef VERSION
 
-/* Windows compilation. */
-//#undef WIN32
+#cmakedefine NETPBM_FOUND
 
 /* Output stream for debug messages. */
 #ifdef DEBUG
