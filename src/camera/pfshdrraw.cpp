@@ -50,6 +50,7 @@
 #include <linearhdr.h>
 #include <fstream>
 #include <sstream>
+#include <rgbeio.h>
 
 #ifdef NETPBM_FOUND
 #include <ppmio.h>
@@ -120,6 +121,8 @@ void printHelp() {
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0 \n"
                     "\t[--use-yxy, -X]: merge hdr in Yxy space instead of RGB\n"
                     "\t[--cull, -c]: reduce number of input exposures used\n"
+                    "\t[--rgbe -R]: output radiance rgbe (default)\n"
+                    "\t[--pfs -P]: output pfs stream\n"
                     "\t[--verbose, -v] [--help]\n");
 }
 
@@ -139,6 +142,7 @@ void pfshdrraw(int argc, char *argv[]) {
     bool keep = true;
     int lead_channel = -1;
     bool dataonly = false;
+    bool rgbe = false;
 
     /* helper */
     int c;
@@ -148,6 +152,8 @@ void pfshdrraw(int argc, char *argv[]) {
             {"verbose",    no_argument,       nullptr, 'v'},
             {"use-yxy",    no_argument,       nullptr, 'X'},
             {"cull",    no_argument,       nullptr, 'c'},
+            {"rgbe",    no_argument,       nullptr, 'R'},
+            {"pfs",    no_argument,       nullptr, 'P'},
             {"deghosting", required_argument, nullptr, 'd'},
             {"tsv", no_argument, nullptr, 't'},
             { "saturation-offset", required_argument, nullptr, 'o' },
@@ -199,6 +205,12 @@ void pfshdrraw(int argc, char *argv[]) {
             case 'c':
                 keep = false;
                 break;
+            case 'R':
+                rgbe = true;
+                break;
+            case 'P':
+                rgbe = false;
+                break;
             default:
                 throw QuietException();
         }
@@ -241,7 +253,6 @@ void pfshdrraw(int argc, char *argv[]) {
 
         if (!fromfile){
             iframe = pfsio.readFrame(stdin);
-//            info = frame_info(iframe, opt_scale);
             if (iframe == nullptr)
                 break; // No more frames
         } else {
@@ -353,7 +364,6 @@ void pfshdrraw(int argc, char *argv[]) {
     if (dataonly)
         return;
     if (frame_no < 1)
-
         throw pfs::Exception("at least one image required for calibration (check paths in hdrgen script?)");
 
     VERBOSE_STR << "using " << frame_no  << " frames, range min:" << gmin << ", max:" << gmax <<  endl;
@@ -382,14 +392,18 @@ void pfshdrraw(int argc, char *argv[]) {
     sp = linear_Response(RGB_out, exposures, opt_saturation_offset_perc, opt_black_offset_perc,
                          opt_deghosting, opt_scale, lead_channel);
 
-    pfs::transformColorSpace(hdr_target, Xj, Yj, Zj, pfs::CS_XYZ, Xj, Yj, Zj);
-
     if (sp > 0) {
         float perc = ceilf(100.0f * sp / size);
         VERBOSE_STR << "saturated pixels found in " << perc << "% of the image!" << endl;
     }
-
-    pfsio.writeFrame(frame, stdout);
+    if (rgbe){
+        RGBEWriter writer( stdout, true );
+        pfs::transformColorSpace( hdr_target, Xj, Yj, Zj, pfs::CS_RGB, Xj, Yj, Zj );
+        writer.writeImage( Xj, Yj, Zj );
+    } else {
+        pfs::transformColorSpace(hdr_target, Xj, Yj, Zj, pfs::CS_XYZ, Xj, Yj, Zj);
+        pfsio.writeFrame(frame, stdout);
+    }
 
     // clean up memory
     pfsio.freeFrame(frame);
