@@ -1,9 +1,11 @@
-cmake_minimum_required (VERSION 2.8.8)
+cmake_minimum_required (VERSION 3.0.0)
 
 
 project(linearhdr)
 
-set(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_LIST_DIR}/build)
+IF(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    SET(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_LIST_DIR}/build CACHE PATH "installation destination (parent of bin)" FORCE)
+ENDIF(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 
 
 
@@ -48,4 +50,7 @@ configure_file (
         "${PROJECT_BINARY_DIR}/config.h"
 )
 
-add_subdirectory (src) 
+add_subdirectory (src)
+
+configure_file(src/linearhdr_make_list.py ${CMAKE_INSTALL_PREFIX}/bin/linearhdr_make_list COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
+configure_file(src/linearhdr_calibrate.py ${CMAKE_INSTALL_PREFIX}/bin/linearhdr_calibrate COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)

@@ -14,22 +14,22 @@ set_target_properties(pfs PROPERTIES VERSION 2.0.0 SOVERSION 2)
 SET( CMAKE_EXE_LINKER_FLAGS  "${CMAKE_EXE_LINKER_FLAGS} -fPIC" )
 SET( CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -fPIC" )
 
-# Replace a few tags in pfs.pc.in file, create pfs.pc
-file(READ ${CMAKE_CURRENT_SOURCE_DIR}/pfs.pc.in file_content)
-#message("Input:\n${file_content}")
-set (file_content_res)
-string(REGEX REPLACE "(@prefix@)" "${CMAKE_INSTALL_PREFIX}" file_content_res "${file_content}")
-string(REGEX REPLACE "(@PACKAGE_VERSION@)" "${pfstools_VERSION_MAJOR}.${pfstools_VERSION_MINOR}" file_content_res "${file_content_res}")
-#message("Output:\n${file_content_res}")
-file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/pfs.pc" "${file_content_res}")	
-
-install (TARGETS pfs 
-	LIBRARY DESTINATION lib${LIB_SUFFIX}
-	ARCHIVE DESTINATION lib${LIB_SUFFIX})
-
-install (FILES ${CMAKE_CURRENT_SOURCE_DIR}/pfs.h ${CMAKE_CURRENT_SOURCE_DIR}/array2d.h DESTINATION include/pfs)
-install (FILES ${CMAKE_CURRENT_BINARY_DIR}/pfs.pc DESTINATION lib${LIB_SUFFIX}/pkgconfig)
-	
+## Replace a few tags in pfs.pc.in file, create pfs.pc
+#file(READ ${CMAKE_CURRENT_SOURCE_DIR}/pfs.pc.in file_content)
+##message("Input:\n${file_content}")
+#set (file_content_res)
+#string(REGEX REPLACE "(@prefix@)" "${CMAKE_INSTALL_PREFIX}" file_content_res "${file_content}")
+#string(REGEX REPLACE "(@PACKAGE_VERSION@)" "${pfstools_VERSION_MAJOR}.${pfstools_VERSION_MINOR}" file_content_res "${file_content_res}")
+##message("Output:\n${file_content_res}")
+#file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/pfs.pc" "${file_content_res}")
+#
+#install (TARGETS pfs
+#	LIBRARY DESTINATION lib${LIB_SUFFIX}
+#	ARCHIVE DESTINATION lib${LIB_SUFFIX})
+#
+#install (FILES ${CMAKE_CURRENT_SOURCE_DIR}/pfs.h ${CMAKE_CURRENT_SOURCE_DIR}/array2d.h DESTINATION include/pfs)
+#install (FILES ${CMAKE_CURRENT_BINARY_DIR}/pfs.pc DESTINATION lib${LIB_SUFFIX}/pkgconfig)
+#
 
 
 

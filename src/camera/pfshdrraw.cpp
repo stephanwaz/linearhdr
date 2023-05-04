@@ -58,7 +58,7 @@
 
 using namespace std;
 
-#define PROG_NAME "pfshdrraw"
+#define PROG_NAME "linearhdr"
 
 inline float max(float a, float b) {
     return (a > b) ? a : b;
@@ -104,6 +104,14 @@ inline FrameInfo frame_info(pfs::Frame *frame, float scale){
 
 }
 
+FrameInfo correct_exposure(FrameInfo info) {
+    FrameInfo result = {1.f, 100.f, 1.f, 1.f};
+    result.etime = std::pow(2, -std::round(std::log2(1/info.etime)*3)/3);
+    result.aperture = std::pow(2, std::round(std::log2(info.aperture* info.aperture)*3)/6);
+    result.iso = info.iso;
+    return result;
+}
+
 //---------------------------------------------------
 //--- standard PFS stuff
 bool verbose = false;
@@ -113,17 +121,33 @@ class QuietException {
 
 
 void printHelp() {
-    fprintf(stderr, PROG_NAME ": \n"
+    fprintf(stderr, PROG_NAME " [Options] [exposure_list]\n"
+                    "Options:\n"
                     "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.2\n"
-                    "\t[--range, -r <val>]: dynamic range of single raw exposure, used to set lower cutoff, give as power of 2 default=6.64386\n"
-                    "\t[--deghosting, -d <val>]: relative difference for outlier detection when less than 1, otherwise absolute difference (good for clouds) default=OFF\n"
-                    "\t[--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak, do not use with large files!\n"
-                    "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0 \n"
+                    "\t[--range, -r <val>]: dynamic range of single raw exposure, used to set lower cutoff,"
+                    "\n\t\tgive as power of 2 default=6.64386\n"
+                    "\t[--deghosting, -d <val>]: relative difference for outlier detection when less than 1,"
+                    "\n\t\totherwise absolute difference (good for clouds) default=OFF\n"
+                    "\t[--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak,"
+                    "\n\t\tdo not use with large files!\n"
+                    "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
                     "\t[--use-yxy, -X]: merge hdr in Yxy space instead of RGB\n"
                     "\t[--cull, -c]: reduce number of input exposures used\n"
-                    "\t[--rgbe -R]: output radiance rgbe (default)\n"
-                    "\t[--pfs -P]: output pfs stream\n"
-                    "\t[--verbose, -v] [--help]\n");
+                    "\t[--rgbe, -R]: output radiance rgbe (default)\n"
+                    "\t[--pfs, -P]: output pfs stream\n"
+                    "\t[--exact, -e]: input camera values interpreted as exact (default=False)\n"
+                    "\t[--nominal, -n]: input camera values interpreted as nominal (default=True)\n"
+                    "\t[--verbose, -v]\n\t[--help]\n\n"
+                    "If exposure_list is given, images are read from file formatted as:\n"
+                    "\t<image1.ppm> <iso> <aperture> <exposure_time>\n"
+                    "\t<image2.ppm> <iso> <aperture> <exposure_time>\n\t...\n\n"
+                    "list should be sorted by longest exposure time to shortest (only critical if --cull)\n"
+                    "else, program expects a sequence of images (formatted as from pfsin on the stdin),\n"
+                    "use/see 'make_hdr_list' for an example.\n"
+                    "By default, linearhdr expects nominal aperture and shutter speed."
+                    "If using pfsinme, note that nominal camera values are manipulated by dcraw\n"
+                    " (but with less accuracy) so make sure to use the --exact flag so shutter \n"
+                    "and aperture are not double corrected.\n\n");
 }
 
 void pfshdrraw(int argc, char *argv[]) {
@@ -142,7 +166,8 @@ void pfshdrraw(int argc, char *argv[]) {
     bool keep = true;
     int lead_channel = -1;
     bool dataonly = false;
-    bool rgbe = false;
+    bool rgbe = true;
+    bool nominal = true;
 
     /* helper */
     int c;
@@ -154,6 +179,8 @@ void pfshdrraw(int argc, char *argv[]) {
             {"cull",    no_argument,       nullptr, 'c'},
             {"rgbe",    no_argument,       nullptr, 'R'},
             {"pfs",    no_argument,       nullptr, 'P'},
+            {"exact",    no_argument,       nullptr, 'e'},
+            {"nominal",    no_argument,       nullptr, 'n'},
             {"deghosting", required_argument, nullptr, 'd'},
             {"tsv", no_argument, nullptr, 't'},
             { "saturation-offset", required_argument, nullptr, 'o' },
@@ -163,7 +190,7 @@ void pfshdrraw(int argc, char *argv[]) {
     };
 
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hvud:s:r:X:o:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevud:s:r:X:o:", cmdLineOptions, &optionIndex)) != -1) {
 
         switch (c) {
             /* help */
@@ -173,6 +200,12 @@ void pfshdrraw(int argc, char *argv[]) {
             /* verbose */
             case 'v':
                 verbose = true;
+                break;
+            case 'n':
+                nominal = true;
+                break;
+            case 'e':
+                nominal = false;
                 break;
             case 'X':
                 yxy = true;
@@ -220,15 +253,6 @@ void pfshdrraw(int argc, char *argv[]) {
     std::ifstream infile(argv[optind]);
 
 
-    /* ------------------------------------------------------------------------------------------------ */
-    /* -------------------------------- initialization done ------------------------------------------- */
-    /* ------------------------------------------------------------------------------------------------ */
-
-    /* ------------------------------------------------------------------------------------------------ */
-    /* ---------------------------- preparation of images start --------------------------------------- */
-    /* ------------------------------------------------------------------------------------------------ */
-
-    //--- read frames from pfs stream
     int frame_no = 0;
     int width = 0;
     int height = 0;
@@ -252,45 +276,52 @@ void pfshdrraw(int argc, char *argv[]) {
         FrameInfo info = {1.f, 100.f, 1.f, 1.f};
 
         if (!fromfile){
+            //--- read frames from pfs stream
             iframe = pfsio.readFrame(stdin);
             if (iframe == nullptr)
                 break; // No more frames
         } else {
+            //--- read frames from list by parsing file
             std::string line, framefile;
             if (std::getline(infile, line)) {
                 std::istringstream iss(line);
                 if (!(iss >> framefile >> info.iso >> info.aperture >> info.etime)) { continue;}
+                if (nominal)
+                    info = correct_exposure(info);
                 info.factor = opt_scale * 100.0f * info.aperture * info.aperture / ( info.iso * info.etime );
 
                 FILE *fh = fopen( framefile.c_str(), "rb");
                 pfs::FrameFile ff = pfs::FrameFile( fh, framefile.c_str());
                 #ifdef NETPBM_FOUND
-                PPMReader reader( "pfshdrraw", ff.fh );
+                PPMReader reader( PROG_NAME, ff.fh );
                 iframe = pfsio.createFrame( reader.getWidth(), reader.getHeight() );
                 pfs::Channel *X, *Y, *Z;
                 iframe->createXYZChannels( X, Y, Z );
 
                 //Store sRGB data temporarily in XYZ channels
                 reader.readImage( X, Y, Z );
-                pfs::transformColorSpace( pfs::CS_RGB, X, Y, Z, pfs::CS_XYZ, X, Y, Z );
+                pfs::transformColorSpace(pfs::CS_RGB, X, Y, Z, hdr_target, X, Y, Z);
                 #else
                 throw pfs::Exception("linearhdr compiled without ppm support use pfsin to load files");
                 #endif
-
 
             } else
                 break; //no more lines
         }
 
         if (keep || oorange) {
-            if (!fromfile)
-                info = frame_info(iframe, opt_scale);
 
             pfs::Channel *X = nullptr;
             pfs::Channel *Y = nullptr;
             pfs::Channel *Z = nullptr;
 
             iframe->getXYZChannels(X, Y, Z);
+
+            if (!fromfile){
+                info = frame_info(iframe, opt_scale);
+                pfs::transformColorSpace(pfs::CS_XYZ, X, Y, Z, hdr_target, X, Y, Z);
+            }
+
 
             if (X == nullptr || Y == nullptr || Z == nullptr)
                 throw pfs::Exception("missing XYZ channels in the PFS stream (try to preview your files using pfsview)");
@@ -299,8 +330,6 @@ void pfshdrraw(int argc, char *argv[]) {
             width = Y->getCols();
             height = Y->getRows();
             size = width * height;
-
-            pfs::transformColorSpace(pfs::CS_XYZ, X, Y, Z, hdr_target, X, Y, Z);
 
             if (dataonly){
                 fmax = info.factor;
@@ -343,19 +372,18 @@ void pfshdrraw(int argc, char *argv[]) {
                         pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
                 }
 
-                fmax = info.factor * (1 - opt_saturation_offset_perc);
-                fmin = fmax * opt_black_offset_perc;
-                gmax = max(gmax, fmax);
-                gmin = min(gmin, fmin);
-
-                frame_no++;
-                VERBOSE_STR << "frame #" << frame_no << ", min:" << fmin << ", max:" << fmax <<  endl;
-
                 // add to exposures list
                 imgsR.push_back(eR);
                 imgsG.push_back(eG);
                 imgsB.push_back(eB);
             }
+            fmax = info.factor * (1 - opt_saturation_offset_perc);
+            fmin = fmax * opt_black_offset_perc;
+            gmax = max(gmax, fmax);
+            gmin = min(gmin, fmin);
+
+            frame_no++;
+            VERBOSE_STR << "frame #" << frame_no << ", min:" << fmin << ", max:" << fmax <<  endl;
         }
 
         oorange = oorange && (pmax > 1 - opt_saturation_offset_perc);
