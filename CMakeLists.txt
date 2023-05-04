@@ -5,12 +5,28 @@ project(linearhdr)
 
 set(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_LIST_DIR}/build)
 
-include_directories(/opt/local/include/)
+
 
 set(VERSION_MAJOR 0)
 set(VERSION_MINOR 1)
 
-set( CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake )
+include_directories(/opt/local/include/)
+include( CheckCXXSourceCompiles )
+
+set( CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake)
+
+# ======== Check for getopt, which is missing on Windows ========
+
+check_cxx_source_compiles( "#include \"getopt.h\" \n int main() { return 0; }" HAS_GETOPT )
+if( NOT HAS_GETOPT )
+    MESSAGE( STATUS "getopt not found, a replacement needs to be compiled. " )
+    set( GETOPT_INCLUDE "${PROJECT_SOURCE_DIR}/src/getopt" )
+    set( GETOPT_OBJECT "$<TARGET_OBJECTS:getopt>" )
+else( NOT HAS_GETOPT )
+    MESSAGE( STATUS "getopt found. " )
+    set( GETOPT_INCLUDE ".") # work around, cannot pass empty string
+    set( GETOPT_OBJECT )
+endif( NOT HAS_GETOPT )
 
 OPTION(WITH_NetPBM "Use NetPBM library" ON)
 
