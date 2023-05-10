@@ -58,13 +58,18 @@ def main(*imgs, crop=(0,0,50,50), opts=""):
 if __name__ == '__main__':
     
     usage = f"""
-usage: {sys.argv[0]} '[linearhdr options]' img1 img2 ... <upper_left> <upper_right> <width> <height>
+usage: {sys.argv[0]} '[linearhdr options]' [--help/-h] img1 img2 ... <upper_left> <upper_right> <width> <height>
 
-    last four arguments identify the crop region for calibration.
+    last four arguments identify the crop region for calibration. use linearhdr --help to open calibration instructions
     """
     
     args = []
     opts = ""
+    if "-h" in sys.argv or "--help" in sys.argv:
+        print(usage, file=sys.stderr)
+        file = __file__.rsplit("/", 1)[0] + "/linearhdr_README.rst"
+        os.system(f"more {file}")
+        sys.exit(0)
     for a in sys.argv[1:-4]:
         if os.path.isfile(a):
             args.append(a)

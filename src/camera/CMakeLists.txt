@@ -7,10 +7,10 @@ include_directories(${NETPBM_INCLUDE_DIR})
 
 
 if( NETPBM_FOUND )
-    add_executable(linearhdr pfshdrraw.cpp responses.cpp linearhdr.cpp nrutil.cpp ../fileformat/ppmio.cpp ../fileformat/rgbeio.cpp "${GETOPT_OBJECT}")
+    add_executable(linearhdr linearhdr_main.cpp responses.cpp linearhdr.cpp nrutil.cpp ../fileformat/ppmio.cpp ../fileformat/rgbeio.cpp "${GETOPT_OBJECT}")
     target_link_libraries(linearhdr pfs ${NETPBM_LIBRARIES})
 else()
-    add_executable(linearhdr pfshdrraw.cpp responses.cpp linearhdr.cpp nrutil.cpp ../fileformat/rgbeio.cpp "${GETOPT_OBJECT}")
+    add_executable(linearhdr linearhdr_main.cpp responses.cpp linearhdr.cpp nrutil.cpp ../fileformat/rgbeio.cpp "${GETOPT_OBJECT}")
     target_link_libraries(linearhdr pfs)
 endif()
 

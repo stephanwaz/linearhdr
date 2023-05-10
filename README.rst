@@ -57,15 +57,17 @@ You can find this information for many smart phones. Using published values will
 but will get HDR images within a reasonable range. For example my iphone 12 mini has a measured brightness,
 achieved with Konica-Minolta LS 110 by:
 
-    1. disabling settings > display > truetone
-    2. disabling settings > accessibility > display & text size > auto brightness
-    3. setting brightness to max
-    4. viewing an all white picture
-    5. in a dark room
-    5. measuring the center of the phone from a perpendicular vantage at least 1 m away.
+    1. disabling: settings > display & brightness > truetone
+    2. disabling: settings > accessibility > display & text size > auto brightness
+    3. set to Never: settings > display & brightness > auto-lock
+    4. setting brightness to max
+    5. viewing an all white picture
+    6. in a dark room
+    7. measuring the center of the phone from a perpendicular vantage at least 1 m away
+       (or minimum focal distance of luminance meter).
 
 of 587 cd/m^2. This is compared to review values of 627. This discrepancy is likely due to the age of my phone, and that
-it has a scree protector, but without a luminance meter, using this value I would be within 10% of truth.
+it has a scree protector, but without a luminance meter, using this value I would be within 10%.
 
 For the image sequence:
 
@@ -91,7 +93,7 @@ This will output for every frame the raw r g b channels, there exposure compensa
 where l is photopic luminance, and two columns indicating with 0 or 1 whether the raw values are out of range. For
 values between zero and one, this means that some pixels are out of range. The last lines will print the average and
 the min and max taken from the rows where both the lower and upper ranges are 0. if the variance between max and min
-is too much, examinine the data and determine if changing the cutoffs from the top (by adjusting -o) or the bottom
+is too much, examine the data and determine if changing the cutoffs from the top (by adjusting -o) or the bottom
 (by adjusting -r) would improve the result. give these arguments in quotes::
 
     linearhdr_calibrate '-o .2' sequence/*.raw 2000 1000 100 100
@@ -110,7 +112,8 @@ one full stop (3 clicks) between frames, beginning with no white pixels
 (or upper limit found in calibration) and ending with no black pixels. Most dSLR cameras have
 a histogram display with the image preview to aid with this. ISO and aperture should be kept
 constant, although in theory these will be properly compensated for. White balance should also
-be held constant with any pre-calibration values.
+be held constant with any pre-calibration values. Always use the --scale value associated with the
+particular camera and lens, as well as the --saturation-offset identified during calibration.
 
 linearhdr --help::
 
@@ -124,8 +127,9 @@ linearhdr --help::
         [--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak,
             do not use with large files!
         [--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0
+            use linearhdr_calibrate to calculate
         [--use-yxy, -X]: merge hdr in Yxy space instead of RGB
-        [--cull, -c]: reduce number of input exposures used
+        [--cull, -c]: throw away extra exposures that are not needed to keep output in range
         [--rgbe, -R]: output radiance rgbe (default)
         [--pfs, -P]: output pfs stream
         [--exact, -e]: input camera values interpreted as exact (default=False)
@@ -138,8 +142,45 @@ linearhdr --help::
         <image2.ppm> <iso> <aperture> <exposure_time>
         ...
 
-        list should be sorted by longest exposure time to shortest (only critical if --cull)
-        else, program expects a sequence of images (formatted as from pfsin on the stdin),
-    use/see 'make_hdr_list' for an example.
-    By default, linearhdr expects nominal aperture and shutter speed.If using pfsinme, note that nominal camera values are manipulated by dcraw (but with less accuracy)
-     so make sure to use the --exact flag so shutter and aperture are not double corrected.
+    list should be sorted by longest exposure time to shortest (only critical if --cull)
+    else, program expects a sequence of images (formatted as from pfsin on the stdin),
+    use/see 'linearhdr_make_list' for an example.
+    By default, linearhdr expects nominal aperture and shutter speed.
+    If using pfsinme, note that nominal camera values are manipulated by dcraw
+     (but with less accuracy) so make sure to use the --exact flag so shutter
+    and aperture are not double corrected.
+
+The "range" option can be used to set the lowend acceptable value, by default and raw values below .01 (2^-6.64386)
+are counted out of ranges, but for some raw images with higher bit depth there may be useful information in
+this low end that could reduce noise. Alternative, low bit depth or less reliable cameras may be too noisy in this
+range to provide useful signal:noise ratios. by extending the range parameter, it is possible to build HDR images from
+more widely spaced exposures.
+
+The "deghosting" option can attempt to remove moving elements from the sequence. It will use the first image in
+the sequence as the reference, assuming the exposure list is order by longest exposure first, this will be the
+pixel with the least photon noise. To prioritize a different frame, list that image first in the sequence (but note
+that if this is the shortest exposure is not out of range this is incompatible with cull,
+as all subsequent exposures will be skipped. The
+deghosting works by excluding exposures that deviate from this reference by a given relative factor (when less than 1)
+or an absolute factor (when greater than 1). use a relative value to remove object motion (people cars) use an
+absolute value to isolate deghosting to the sky (moving clouds/sun).
+
+the "tsv" option is for debugging, raw data analysis and simply dumps the exposure values (raw and compensated) to
+the standard output. output columns depend on RGB or Yxy output.
+for RGB: R_exp G_exp B_exp R_lum G_lum B_lum lum   below above
+for Yxy: Y_exp x     y     Y_lum x     y     Y_lum below above
+
+The "use-yxy" merges hdr in Yxy space, this should not be used for calibration unless the source is perfectly
+matched to the white balance of the camera, but does do a better job holding luminance calibration across saturated
+colors.
+
+"cull" can be useful when deghosting fails as a way to reduce redundant date in the brightest part of the image
+introduced by moving clouds and sun positions, by eliminating exposures that do not add to the usable dynamic range.
+
+"rgbe/pfs" select output format, the last flag takes priority, but "tsv" overrides both.
+
+"exact" directly uses aperture and shutter values for exposure compensation.
+
+"nominal" will correct aperture by F = 2^(round(log2(fn^2) * 3) / 6) and
+exposure time by T = 2^(round(log2(1/T) * 3) / 3)
+
