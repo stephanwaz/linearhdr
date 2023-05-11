@@ -191,7 +191,7 @@ void pfshdrraw(int argc, char *argv[]) {
     };
 
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevud:s:r:X:o:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevuXd:s:r:o:", cmdLineOptions, &optionIndex)) != -1) {
 
         switch (c) {
             /* help */

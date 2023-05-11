@@ -182,7 +182,6 @@ int linear_Response(pfs::Array2D *out[],
                     div += w[i];
                 }
             }
-
             if (div >= 1e-15) {
                 (*out[cc])(j) = sum / div;
                 mmax[cc] = (mmax[pc] > (*out[pc])(j)) ? mmax[cc] : (*out[cc])(j);
