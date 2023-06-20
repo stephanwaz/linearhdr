@@ -21,6 +21,7 @@ def info_from_exif(img):
     aperture = 2**(round(log2(aperture**2)*3,0)/6)
     return shutter, aperture, iso
 
+
 def get_raw_frame(img, u, l, w, h, opts):
     ppm = img + "_calibrate.ppm"
     Popen(shlex.split(f"dcraw_emu -4 -o 1 -B {u} {l} {w} {h} -w -Z {ppm} {img}")).communicate()
@@ -29,16 +30,15 @@ def get_raw_frame(img, u, l, w, h, opts):
     f = open(txt, 'w')
     print(f"{ppm} {iso} {ap:.03f} {1/sh:.08f}", file=f)
     f.close()
-    f = Popen(shlex.split(f"linearhdr {opts} --tsv {txt}"), stdout=PIPE)
+    f = Popen(shlex.split(f"linearhdr {opts} --use-rgb --tsv {txt}"), stdout=PIPE)
     vals = Popen(shlex.split("total -m"), stdin=f.stdout, stdout=PIPE).communicate()[0].split()
-    vals = [float(i) for i in vals]
+    vals = [float(i) for i in vals] + [float(vals[-2]) + float(vals[-1])]
     os.remove(ppm)
     os.remove(txt)
     return ppm, sh, ap, iso, vals
 
 
-def main(*imgs, crop=(0,0,50,50), opts=""):
-    ppms = [get_raw_frame(img, *crop, opts=opts) for img in imgs]
+def report(ppms):
     avg = 0
     div = 0
     minv = 1e9
@@ -46,13 +46,19 @@ def main(*imgs, crop=(0,0,50,50), opts=""):
     for ppm, sh, ap, iso, rgb in sorted(ppms, key=lambda x: x[1]):
         print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04f}" for i in rgb]))
         if rgb[-2] == 0 and rgb[-1] == 0:
-            minv = min(minv, rgb[-3])
-            maxv = max(maxv, rgb[-3])
-            avg += rgb[-3]
+            minv = min(minv, rgb[-4])
+            maxv = max(maxv, rgb[-4])
+            avg += rgb[-4]
             div += 1
-    print("Average value:", avg/div)
-    print("min-max for in range exposures:", minv, maxv)
-    print("adjust -o and -r settings of linearhdr to change viable range")
+    print("Average value:", avg/div, file=sys.stderr)
+    print("min-max for in range exposures:", minv, maxv, file=sys.stderr)
+    print("adjust -o and -r settings of linearhdr to change viable range", file=sys.stderr)
+
+
+def main(*imgs, crop=(0,0,50,50), opts=""):
+    ppms = [get_raw_frame(img, *crop, opts=opts) for img in imgs]
+    report(ppms)
+
 
 
 if __name__ == '__main__':

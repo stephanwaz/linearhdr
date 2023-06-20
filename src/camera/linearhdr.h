@@ -44,6 +44,8 @@ int linear_Response(pfs::Array2D *rgb_out[],
                     const float opt_black_offset,
                     float deghosting_value,
                     const float scale,
-                    const int lead_channel = -1);
+                    const int lead_channel = -1,
+                    const float oor_high = 1e-30,
+                    const float oor_low = 1e30);
 
 #endif /* #ifndef _robertson02_h_ */

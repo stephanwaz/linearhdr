@@ -40,21 +40,33 @@ This will install three programs::
     linearhdr_make_list: a python helper script to generate input sequence files
     linearhdr_calibrate: a python script for determining a camera/lens/whitebal scale factor (linearhdr -s)
 
+
+Additional optional python scripts can be installed with::
+
+    pip3 install .
+
+this will install::
+
+    pylinearhdr
+
+Which, in addition to replicating the linearhdr_make_list, linearhdr_calibrate functionality with additional features and
+multicore processing, additional tools, such as shadowband merging are available. see pylinearhdr --help for all options
+
 Calibration
 -----------
 Camera raw files have a broadly linear response, and because of reciprocity calculating absolute luminance across
-ISO, Aperture, and shutter speed are possible across this linear range so long as a single scaling factor
+ISO, Aperture, and shutter speed is possible across this linear range so long as a single scaling factor
 (accounting for differences in ISO digital film standards, lens transmission, etc..) is known.
 
 The linearhdr_calibrate script will determine this scaling factor and output data to check the valid upper limit of
 the linear range (the -s parameter of linearhdr). Test images can be used to adjust -r, if this value is set too high
- (meaning low values are included) the result is noise in the output). For standard full stop hdr sequences, there is
+(meaning low values are included) the result is noise in the output. For standard full stop hdr sequences, there is
 little reason to adjust the default, as it provides more than enough dynamic range for sufficient overlap between
 exposures.
 
 To capture a calibration sequence, you either need a luminance meter, or a source with a known brightness (in cd/m^2).
 You can find this information for many smart phones. Using published values will not be as reliable as a measurment,
-but will get HDR images within a reasonable range. For example my iphone 12 mini has a measured brightness,
+but will get HDR images within a reasonable range. For example my iphone 12 mini has a measured brightness of 587 cd/m^2,
 achieved with Konica-Minolta LS 110 by:
 
     1. disabling: settings > display & brightness > truetone
@@ -66,7 +78,7 @@ achieved with Konica-Minolta LS 110 by:
     7. measuring the center of the phone from a perpendicular vantage at least 1 m away
        (or minimum focal distance of luminance meter).
 
-of 587 cd/m^2. This is compared to review values of 627. This discrepancy is likely due to the age of my phone, and that
+This is compared to review values of 627. This discrepancy is likely due to the age of my phone, and that
 it has a scree protector, but without a luminance meter, using this value I would be within 10%.
 
 For the image sequence:
@@ -76,25 +88,27 @@ For the image sequence:
     3. with ISO 100 and a middle aperture for your lens take a complete sequence of shutter speeds
     4. start at nearly black
     5. go to fully white
-    6. increment in 1/3 stops (usually one rotation of the wheel).
+    6. increment in 1/3 stops (usually one click of the wheel).
     7. make sure you are capturing raw images
 
 To use linearhdr_calibrate:
 
-    1. identify the pixel coordinate of a 100-300 by 100-300 pixel area covering the perpendicular view to the phone
+    1. identify the pixel coordinate of a 100 to 300 by 100 to 300 pixel area covering the perpendicular view to the phone
     2. mark down the upper left corner and check that the pixel dimensions will only see screen.
     3. you can do this with pfsin img.raw | pfsview, photoshop, or other image software.
 
 the command for linearhdr_calibrate assuming CR3 files and pixel coordinates of left=2000, top==1000::
 
-    linearhdr_calibrate sequence/*.raw 2000 1000 100 100
+    linearhdr_calibrate sequence/*.CR3 2000 1000 100 100
 
-This will output for every frame the raw r g b channels, there exposure compensated luminance values (r g b l),
-where l is photopic luminance, and two columns indicating with 0 or 1 whether the raw values are out of range. For
-values between zero and one, this means that some pixels are out of range. The last lines will print the average and
-the min and max taken from the rows where both the lower and upper ranges are 0. if the variance between max and min
-is too much, examine the data and determine if changing the cutoffs from the top (by adjusting -o) or the bottom
-(by adjusting -r) would improve the result. give these arguments in quotes::
+This will output for every frame the raw r g b channels, their exposure compensated luminance values (r g b l),
+where l is photopic luminance, and two columns indicating with 0 or 1 whether the raw values are out of range. When
+there are values between zero and one, only some pixels are out of range indicating that the view to the source area is
+not perfectly consistent. Values close to zero and one are fine, but if most in range exposures are not close to zero,
+check that the cropped region is indeed uniform. The last lines will print the average and the min and max taken from
+the rows where both the lower and upper ranges are 0. If the variance between max and min is too much, examine the data
+and determine if changing the cutoffs from the top (by adjusting -o) or the bottom (by adjusting -r) would improve the
+result. give these arguments in quotes::
 
     linearhdr_calibrate '-o .2' sequence/*.raw 2000 1000 100 100
 
@@ -127,8 +141,12 @@ linearhdr --help::
         [--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak,
             do not use with large files!
         [--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0
+        [--oor-low, -m <val>]: value to use for out of range low, default from data
+        [--oor-high, -x <val>]: value to use for out of range high, default from data
+        [--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0
             use linearhdr_calibrate to calculate
-        [--use-yxy, -X]: merge hdr in Yxy space instead of RGB
+        [--use-yuv, -L]: merge hdr in YUV space instead of RGB (default)
+        [--use-rgb, -C]: merge hdr in RGB space instead of YUV
         [--cull, -c]: throw away extra exposures that are not needed to keep output in range
         [--rgbe, -R]: output radiance rgbe (default)
         [--pfs, -P]: output pfs stream
@@ -170,9 +188,12 @@ the standard output. output columns depend on RGB or Yxy output.
 for RGB: R_exp G_exp B_exp R_lum G_lum B_lum lum   below above
 for Yxy: Y_exp x     y     Y_lum x     y     Y_lum below above
 
-The "use-yxy" merges hdr in Yxy space, this should not be used for calibration unless the source is perfectly
+The "use-yuv" merges hdr in Yuv space, this should not be used for calibration unless the source is perfectly
 matched to the white balance of the camera, but does do a better job holding luminance calibration across saturated
 colors.
+
+The "use-rgb" merges hdr in rgb space, this should be used for calibration and is appended by default to
+linearhdr_calibrate call.
 
 "cull" can be useful when deghosting fails as a way to reduce redundant date in the brightest part of the image
 introduced by moving clouds and sun positions, by eliminating exposures that do not add to the usable dynamic range.

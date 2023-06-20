@@ -77,7 +77,9 @@ int linear_Response(pfs::Array2D *out[],
                    const float opt_black_offset,
                    float deghosting_value,
                    const float scale,
-                   const int lead_channel = -1){
+                   const int lead_channel = -1,
+                   const float oor_high = 1e-30,
+                   const float oor_low = 1e30){
 
     // number of exposures
     int N = imgs[0]->size();
@@ -91,8 +93,8 @@ int linear_Response(pfs::Array2D *out[],
     int saturated_pixels = 0;
     int under_pixels = 0;
 
-    float mmax[3] = {1e-30, 1e-30, 1e-30};
-    float mmin[3] = {1e30, 1e30, 1e30};
+    float mmax[3] = {oor_high, oor_high, oor_high};
+    float mmin[3] = {oor_low, oor_low, oor_low};
 
     // For each pixel
     int skipped_deghost = 0;
@@ -149,6 +151,7 @@ int linear_Response(pfs::Array2D *out[],
 
                     float deviation_from_ref = 0;
                     for (int cc = 0; cc < 3; cc++) {
+                        //deghost only on luminance unless RGB
                         if (lead_channel < 0 || cc == lead_channel) {
                             //use absolute deviation
                             if (deghosting_value >= 1)

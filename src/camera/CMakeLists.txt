@@ -14,6 +14,10 @@ else()
     target_link_libraries(linearhdr pfs)
 endif()
 
+add_executable(colorchange colorchange.cpp "${GETOPT_OBJECT}")
+target_link_libraries(colorchange pfs)
+
 message(STATUS ${CMAKE_INSTALL_PREFIX})
 
 install (TARGETS linearhdr DESTINATION bin)
+install (TARGETS colorchange DESTINATION bin)

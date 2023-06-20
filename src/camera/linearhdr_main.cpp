@@ -131,8 +131,12 @@ void printHelp() {
                     "\t[--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak,"
                     "\n\t\tdo not use with large files!\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
+                    "\t[--oor-low, -m <val>]: value to use for out of range low, default from data\n"
+                    "\t[--oor-high, -x <val>]: value to use for out of range high, default from data\n"
+                    "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
                     "\t\tuse linearhdr_calibrate to calculate\n"
-                    "\t[--use-yxy, -X]: merge hdr in Yxy space instead of RGB\n"
+                    "\t[--use-yuv, -L]: merge hdr in YUV space instead of RGB (default)\n"
+                    "\t[--use-rgb, -C]: merge hdr in RGB space instead of YUV\n"
                     "\t[--cull, -c]: throw away extra exposures that are not needed to keep output in range\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
                     "\t[--pfs, -P]: output pfs stream\n"
@@ -158,17 +162,19 @@ void pfshdrraw(int argc, char *argv[]) {
 
     /* defaults */
 
-    float opt_saturation_offset_perc = 0.01;
+    float opt_saturation_offset_perc = 0.2;
     float opt_black_offset_perc = 0.01;
     float range = 6.64386;
     float opt_deghosting = -1;
     float opt_scale = 1.0f;
-    bool yxy = false;
+    bool yuv = true;
     bool keep = true;
-    int lead_channel = -1;
+    int lead_channel = 0;
     bool dataonly = false;
     bool rgbe = true;
     bool nominal = true;
+    float oor_high = 1e-30;
+    float oor_low = 1e30;
 
     /* helper */
     int c;
@@ -176,7 +182,8 @@ void pfshdrraw(int argc, char *argv[]) {
     static struct option cmdLineOptions[] = {
             {"help",       no_argument,       nullptr, 'h'},
             {"verbose",    no_argument,       nullptr, 'v'},
-            {"use-yxy",    no_argument,       nullptr, 'X'},
+            {"use-yuv",    no_argument,       nullptr, 'L'},
+            {"use-rgb",    no_argument,       nullptr, 'C'},
             {"cull",    no_argument,       nullptr, 'c'},
             {"rgbe",    no_argument,       nullptr, 'R'},
             {"pfs",    no_argument,       nullptr, 'P'},
@@ -187,11 +194,13 @@ void pfshdrraw(int argc, char *argv[]) {
             { "saturation-offset", required_argument, nullptr, 'o' },
             { "range", required_argument, nullptr, 'r' },
             { "scale", required_argument, nullptr, 's' },
+            { "oor-low", required_argument, nullptr, 'm' },
+            { "oor-high", required_argument, nullptr, 'x' },
             {nullptr, 0,                         nullptr, 0}
     };
 
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevuXd:s:r:o:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevuXCLd:s:r:o:m:x:", cmdLineOptions, &optionIndex)) != -1) {
 
         switch (c) {
             /* help */
@@ -208,9 +217,23 @@ void pfshdrraw(int argc, char *argv[]) {
             case 'e':
                 nominal = false;
                 break;
-            case 'X':
-                yxy = true;
+            case 'L':
+                yuv = true;
                 lead_channel = 0;
+                break;
+            case 'x':
+                oor_high = atof(optarg);
+                break;
+            case 'm':
+                oor_low = atof(optarg);
+                break;
+            case 'X':
+                yuv = true;
+                lead_channel = 0;
+                break;
+            case 'C':
+                yuv = false;
+                lead_channel = -1;
                 break;
             case 'o':
                 opt_saturation_offset_perc = atof(optarg);
@@ -269,7 +292,7 @@ void pfshdrraw(int argc, char *argv[]) {
     ExposureList imgsG;
     ExposureList imgsB;
 
-    pfs::ColorSpace hdr_target = yxy ? pfs::CS_Yxy : pfs::CS_RGB;
+    pfs::ColorSpace hdr_target = yuv ? pfs::CS_YUV : pfs::CS_RGB;
 
     while (true) {
         pmax = 0;
@@ -301,6 +324,7 @@ void pfshdrraw(int argc, char *argv[]) {
 
                 //Store sRGB data temporarily in XYZ channels
                 reader.readImage( X, Y, Z );
+//                pfs::multiplyArray()
                 pfs::transformColorSpace(pfs::CS_RGB, X, Y, Z, hdr_target, X, Y, Z);
                 #else
                 throw pfs::Exception("linearhdr compiled without ppm support use pfsin to load files");
@@ -336,7 +360,7 @@ void pfshdrraw(int argc, char *argv[]) {
                 fmax = info.factor;
                 for (int i = 0; i < size; i++) {
                     std::cout << (*X)(i) << "\t" << (*Y)(i) << "\t" << (*Z)(i) << "\t";
-                    if (yxy) {
+                    if (yuv) {
                         pmax = max((*X)(i), pmax);
                         float below = (*X)(i) < opt_black_offset_perc;
                         float above = (*X)(i) > 1 - opt_saturation_offset_perc;
@@ -367,7 +391,7 @@ void pfshdrraw(int argc, char *argv[]) {
                     (*eR.yi)(i) = (*X)(i);
                     (*eG.yi)(i) = (*Y)(i);
                     (*eB.yi)(i) = (*Z)(i);
-                    if (yxy)
+                    if (yuv)
                         pmax = max((*X)(i), pmax);
                     else
                         pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
@@ -419,7 +443,7 @@ void pfshdrraw(int argc, char *argv[]) {
 
     VERBOSE_STR << "applying response..." << endl;
     sp = linear_Response(RGB_out, exposures, opt_saturation_offset_perc, opt_black_offset_perc,
-                         opt_deghosting, opt_scale, lead_channel);
+                         opt_deghosting, opt_scale, lead_channel, oor_high, oor_low);
 
     if (sp > 0) {
         float perc = ceilf(100.0f * sp / size);
