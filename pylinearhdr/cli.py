@@ -4,9 +4,11 @@ import numpy as np
 
 from clasp import click
 import clasp.click_ext as clk
+from clasp.script_tools import pipeline
 
 import pylinearhdr
 import raytools
+from raytools import io, imagetools
 from raytools.utility import pool_call
 from pylinearhdr import calibrate as ca
 from pylinearhdr import make_list as ml
@@ -68,10 +70,44 @@ def makelist(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=Fa
     ppms = pool_call(ml.get_raw_frame, imgs, correct=correct, overwrite=overwrite, listonly=listonly, expandarg=False)
     ml.report(ppms, shell, listonly)
 
+@main.command()
+@click.argument("imgh", callback=clk.is_file)
+@click.argument("imgv", callback=clk.is_file)
+@click.argument("imgn", callback=clk.is_file)
+@click.option("-roh", default=0.0,
+              help="rotation correction (degrees ccw) for horizontal band")
+@click.option("-rov", default=0.0,
+              help="rotation correction (degrees ccw) for vertical band")
+@click.option("-sfov", default=180.0,
+              help="field of view around shaded source that is valid in imgn (in case of partial ND filter)")
+@click.option("-srcsize", default=6.7967e-05,
+              help="solid angle of shaded source (steradians)")
+@click.option("-bw", default=2.0,
+              help="size (in degrees) of shadow band. Note: this value is doubled to account for error in centering on "
+                   "source")
+@click.option("--flip/--no-flip", default=False,
+              help="by default the imgh will be used in the UL and LR quadrants, flip=True will use imgh UR and LL")
+@clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
+def shadowband(ctx, imgh, imgv, imgn, roh=0.0, rov=0.0, sfov=4.0, srcsize=6.7967e-05, bw=2.0, flip=False, **kwargs):
+    """merge set of three images with horizontal, vertical and no shadow band all images are assumed to be 180 degree
+    angular fisheye.
+
+    imgh: hdr with horizontal aligned shadowband
+    imgv: hdr with veritcal aligned shadowband
+    imgn: hdr with no shadowband
+    """
+    hdata = io.hdr2carray(imgh)
+    vdata = io.hdr2carray(imgv)
+    sdata = io.hdr2carray(imgn)
+    blended = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw, flip=flip)
+    header = imagetools.hdr2vm(imgh).header()
+    io.carray2hdr(blended, None, [header])
+
+
 @main.result_callback()
 @click.pass_context
 def printconfig(ctx, returnvalue, **kwargs):
-    """callback to cleanup any temp files"""
+    """callback to clean up any temp files"""
     try:
         clk.tmp_clean(ctx)
     except Exception:
