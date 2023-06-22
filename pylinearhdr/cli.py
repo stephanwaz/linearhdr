@@ -1,10 +1,7 @@
-import sys
-
-import numpy as np
+import os
 
 from clasp import click
 import clasp.click_ext as clk
-from clasp.script_tools import pipeline
 
 import pylinearhdr
 import raytools
@@ -13,6 +10,7 @@ from raytools.utility import pool_call
 from pylinearhdr import calibrate as ca
 from pylinearhdr import make_list as ml
 from pylinearhdr import shadowband as sb
+
 
 @click.group()
 @click.option('-config', '-c', type=click.Path(exists=True),
@@ -30,6 +28,7 @@ def main(ctx, config=None, n=None,  **kwargs):
     """the pylinearhdr executable is a command line interface to utility commands
     as part of the linearhdr package, some scripts available without any dependencies via cmake install.
     """
+    os.environ['CLASP_PIPE'] = '1'
     raytools.io.set_nproc(n)
     ctx.info_name = 'raytools'
     clk.get_config(ctx, config, None, None, None)
@@ -69,6 +68,7 @@ def makelist(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=Fa
         overwrite = False
     ppms = pool_call(ml.get_raw_frame, imgs, correct=correct, overwrite=overwrite, listonly=listonly, expandarg=False)
     ml.report(ppms, shell, listonly)
+
 
 @main.command()
 @click.argument("imgh", callback=clk.is_file)
