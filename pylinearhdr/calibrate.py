@@ -6,6 +6,7 @@ import shlex
 from math import log2
 from subprocess import Popen, PIPE
 
+
 def info_from_exif(img):
     rawinfo = Popen(shlex.split(f"exiftool -ISO -ShutterSpeed -Aperture -s {img}"), 
                     stdout=PIPE).communicate()[0].decode(sys.stdin.encoding)
@@ -22,9 +23,12 @@ def info_from_exif(img):
     return shutter, aperture, iso
 
 
-def get_raw_frame(img, u, l, w, h, opts):
+def get_raw_frame(img, u, l, w, h, opts, bad_pixels):
     ppm = img + "_calibrate.ppm"
-    Popen(shlex.split(f"dcraw_emu -4 -o 1 -B {u} {l} {w} {h} -w -Z {ppm} {img}")).communicate()
+    cs = ""
+    if bad_pixels is not None:
+        cs += f"-P {bad_pixels}"
+    Popen(shlex.split(f"dcraw_emu -4 -o 1 -B {u} {l} {w} {h} {cs} -w -Z {ppm} {img}")).communicate()
     sh, ap, iso = info_from_exif(img)
     txt = img + "_calibrate.txt"
     f = open(txt, 'w')
@@ -64,7 +68,7 @@ def main(*imgs, crop=(0,0,50,50), opts=""):
 if __name__ == '__main__':
     
     usage = f"""
-usage: {sys.argv[0]} '[linearhdr options]' [--help/-h] img1 img2 ... <upper_left> <upper_right> <width> <height>
+usage: {sys.argv[0]} '[linearhdr options]' [--help/-h] img1 img2 ... <left_edge> <top_edge> <width> <height>
 
     last four arguments identify the crop region for calibration. use linearhdr --help to open calibration instructions
     """

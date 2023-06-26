@@ -1,7 +1,10 @@
 import os
+import shutil
 
+import numpy as np
 from clasp import click
 import clasp.click_ext as clk
+from clasp.script_tools import try_mkdir
 
 import pylinearhdr
 import raytools
@@ -10,7 +13,7 @@ from raytools.utility import pool_call
 from pylinearhdr import calibrate as ca
 from pylinearhdr import make_list as ml
 from pylinearhdr import shadowband as sb
-
+from pylinearhdr import pylinearhdr as pl
 
 @click.group()
 @click.option('-config', '-c', type=click.Path(exists=True),
@@ -38,14 +41,16 @@ def main(ctx, config=None, n=None,  **kwargs):
 @click.argument("imgs", callback=clk.are_files)
 @click.argument("crop", callback=clk.split_int)
 @click.option("-hdropts", default="", help="options to pass to linearhdr (put in qoutes)")
+@click.option("-badpixels", callback=clk.is_file,
+              help="file of bad pixels (rows: xpix ypix 0) where xpix is from left and ypix is from top")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def calibrate(ctx, imgs, crop, hdropts="", **kwargs):
+def calibrate(ctx, imgs, crop, badpixels=None, hdropts="", **kwargs):
     """calibration routine, see README.rst
 
     imgs: list of images
     crop: help="<upper_left> <upper_right> <width> <height>"
     """
-    ppms = pool_call(ca.get_raw_frame, imgs, *crop[0:4], hdropts, expandarg=False)
+    ppms = pool_call(ca.get_raw_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False)
     ca.report(ppms)
 
 
@@ -59,15 +64,24 @@ def calibrate(ctx, imgs, crop, hdropts="", **kwargs):
               help="apply correction to nominal aperture and shutter speed values, use with linearhdr --exact")
 @click.option("--listonly/--no-listonly", default=False,
               help="skip execution and just print metadata")
+@click.option("-scale", default=1.0, help="calibration scale factor (only needed by --listonly)")
+@click.option("-saturation", "-saturation-offset", "-s", default=0.2, help="saturation offset (only needed by --listonly)")
+@click.option("-r", "-range", default=0.01, help="lower range of single raw exposure (only needed by --listonly)")
+@click.option("-crop", callback=clk.split_int,
+              help="crop ppm (left upper W H)")
+@click.option("-badpixels", callback=clk.is_file,
+              help="file of bad pixels (rows: xpix ypix 0) where xpix is from left and ypix is from top")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def makelist(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, **kwargs):
+def makelist(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, saturation=0.2, r=0.01,
+             crop=None, badpixels=None, **kwargs):
     """make list routine, use to generate input to linearhdr"""
     if listonly:
         shell = False
-        correct = False
+        correct = True
         overwrite = False
-    ppms = pool_call(ml.get_raw_frame, imgs, correct=correct, overwrite=overwrite, listonly=listonly, expandarg=False)
-    ml.report(ppms, shell, listonly)
+    ppms = pool_call(ml.get_raw_frame, imgs, correct=correct, overwrite=overwrite,
+                     listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False)
+    ml.report(ppms, shell, listonly, scale=scale, sat_w=1-saturation, sat_b=r)
 
 
 @main.command()
@@ -102,6 +116,50 @@ def shadowband(ctx, imgh, imgv, imgn, roh=0.0, rov=0.0, sfov=4.0, srcsize=6.7967
     blended = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw, flip=flip)
     header = imagetools.hdr2vm(imgh).header()
     io.carray2hdr(blended, None, [header])
+
+
+@main.command()
+@click.argument("imgs", callback=clk.are_files)
+@click.option("-out", default="img", help="directory base name, becomes: img_XXX")
+@click.option("-starti", default=0, help="start index")
+@click.option("--ascend/--descend", default=True,
+              help="shot order exposure time. ascending=shortest->longest")
+@clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
+def sort(ctx, imgs, out="img", starti=0, ascend=True, **kwargs):
+    """sort sequence of images into folders based on changes in exposure time"""
+    infos = pool_call(ml.get_raw_frame, imgs, listonly=True, correct=True, expandarg=False)
+    i = starti
+    if ascend:
+        expt = 1e9
+    else:
+        expt = 0
+    for info in infos:
+        if info[1] == expt:
+            print("Duplicate!")
+            continue
+        if (info[1] < expt) != ascend:
+            i += 1
+        expt = info[1]
+        try_mkdir(f"{out}_{i:03d}")
+        shutil.move(info[0], f"{out}_{i:03d}")
+
+@main.command()
+@click.argument("imgs", callback=clk.are_files)
+@click.option("-threshold", default=0.01, help="pixels with raw signal greater than this value across all imgs are "
+                                               "considered bad.")
+@clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
+def badpixels(ctx, imgs, threshold=0.01, **kwargs):
+    """find bad pixels and generate input for calibrate/makelist
+
+    imgs: 2-6 raw format files taken with a range of shutter speeds with the lens cap on.
+    """
+    hdrs = pool_call(pl.camera_raw_values, imgs, expandarg=False)
+    mask = np.all(np.stack(hdrs, axis=0) > threshold, axis=0)
+    yres = mask.shape[1]
+    badpixi = np.stack(np.unravel_index(np.arange(mask.size)[mask.ravel()], mask.shape)).T
+    badpixi[:, 1] = yres - badpixi[:, 1] - 1
+    for bp in badpixi:
+        print("{}\t{}\t0".format(*bp))
 
 
 @main.result_callback()

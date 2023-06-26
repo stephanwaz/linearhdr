@@ -124,8 +124,8 @@ void printHelp() {
     fprintf(stderr, PROG_NAME " [Options] [exposure_list]\n"
                     "Options:\n"
                     "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.2\n"
-                    "\t[--range, -r <val>]: dynamic range of single raw exposure, used to set lower cutoff,"
-                    "\n\t\tgive as power of 2 default=6.64386\n"
+                    "\t[--range, -r <val>]: lower range of single raw exposure, used to set lower cutoff,"
+                    "\n\t\tgive as value between 0 and 0.25, default=0.01\n"
                     "\t[--deghosting, -d <val>]: relative difference for outlier detection when less than 1,"
                     "\n\t\totherwise absolute difference (good for clouds) default=OFF\n"
                     "\t[--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak,"
@@ -164,7 +164,6 @@ void pfshdrraw(int argc, char *argv[]) {
 
     float opt_saturation_offset_perc = 0.2;
     float opt_black_offset_perc = 0.01;
-    float range = 6.64386;
     float opt_deghosting = -1;
     float opt_scale = 1.0f;
     bool yuv = true;
@@ -241,10 +240,9 @@ void pfshdrraw(int argc, char *argv[]) {
                     throw pfs::Exception("saturation offset should be between 0 and 0.25");
                 break;
             case 'r':
-                range = atof(optarg);
-                if( range < 2)
-                    throw pfs::Exception("range should be greater than 2");
-                opt_black_offset_perc = pow(2, -range);
+                opt_black_offset_perc = atof(optarg);
+                if( opt_black_offset_perc < 0 || opt_black_offset_perc > 0.25 )
+                    throw pfs::Exception("saturation offset should be between 0 and 0.25");
                 break;
             case 's':
                 opt_scale = atof(optarg);

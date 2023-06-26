@@ -91,7 +91,7 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=180.0, srcsize=6.7967
     src_mask = np.logical_and(angle > bw * cpeakr, outer_src_mask)
     lum = blend.reshape(3, -1).T[src_mask]
 
-    # make light point from this donut of values
+    # make light point from this donut of values for interpolation
     lp = LightPointKD(None, v[src_mask], lum, vm=vms, features=3, calcomega=False, write=False)
     # interpolate middle
     i, w = lp.interp(v[replace_mask], 40, lum=False, angle=False)

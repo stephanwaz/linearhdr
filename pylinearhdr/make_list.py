@@ -31,25 +31,30 @@ def info_from_exif(img, correct, times=False):
     return shutter, aperture, iso, time
 
 
-def get_raw_frame(img, correct=False, overwrite=False, listonly=False):
+def get_raw_frame(img, correct=False, overwrite=False, listonly=False, crop=None, bad_pixels=None):
     ppm = img + ".ppm"
     if listonly:
         ppm = img
     elif overwrite or not os.path.isfile(ppm):
-        Popen(shlex.split(f"dcraw_emu -4 -o 1 -w {img}")).communicate()
+        cs = ""
+        if crop is not None:
+            cs = "-B {} {} {} {}".format(*crop)
+        if bad_pixels is not None:
+            cs += f" -P {bad_pixels}"
+        Popen(shlex.split(f"dcraw_emu -4 -o 1 {cs} -Z {ppm} -w {img}")).communicate()
     rawinfo = info_from_exif(img, correct, times=listonly)
     return ppm, *rawinfo
 
 
-def report(ppms, s=False, l=False):
+def report(ppms, s=False, l=False, scale=1, sat_w=0.8, sat_b=.01):
     if l:
         print(f"Name Date ISO aperture etime shutter luminance range", file=sys.stderr)
     else:
         ppms = sorted(ppms, key=lambda x: x[1])
     for ppm, sh, ap, iso, time in ppms:
         if l:
-            fmax = 100 * ap * ap * sh / iso
-            print(f"{ppm} {time} {iso} {ap:.03f} {1/sh:.08f} {sh:.02f} = {.01*fmax:.02f} to {.8*fmax:.02f}", file=sys.stderr)
+            fmax = scale * 100 * ap * ap * sh / iso
+            print(f"{ppm} {time} {iso} {ap:.03f} {1/sh:.08f} {sh:.02f} = {sat_b*fmax:.02f} to {sat_w*fmax:.02f}", file=sys.stderr)
         elif s:
             print(f"pfsin {ppm} | pfstag --set 'ISO={iso}' --set 'aperture={ap:.03f}' --set 'exposure_time={1/sh:.08f}'")
         else:

@@ -99,7 +99,9 @@ To use linearhdr_calibrate:
 
 the command for linearhdr_calibrate assuming CR3 files and pixel coordinates of left=2000, top==1000::
 
-    linearhdr_calibrate sequence/*.CR3 2000 1000 100 100
+    linearhdr_calibrate sequence/*.raw 2000 1000 100 100
+    # or
+    # pylinearhdr calibrate sequence/*.raw "2000 1000 100 100"
 
 This will output for every frame the raw r g b channels, their exposure compensated luminance values (r g b l),
 where l is photopic luminance, and two columns indicating with 0 or 1 whether the raw values are out of range. When
@@ -111,6 +113,8 @@ and determine if changing the cutoffs from the top (by adjusting -o) or the bott
 result. give these arguments in quotes::
 
     linearhdr_calibrate '-o .2' sequence/*.raw 2000 1000 100 100
+    # or
+    # pylinearhdr calibrate -hdropts '-o .2' sequence/*.raw "2000 1000 100 100"
 
 Once satisfied with the average take your measured value (ref) to calculate your camera's calibration::
 
@@ -121,21 +125,28 @@ always give this as an argument to linearhdr, or correct the output by multiplyi
 Usage
 -----
 
+Assuming a folder "HDR" containing a sequence of raw images (change extension to match) and a calibration scale of 1.4 to generate an HDR::
+
+    linearhdr_make_list HDR/*.raw > HDR.txt
+    # or
+    # pylinearhdr HDR/*.raw > HDR.txt
+    linearhdr -s 1.2 HDR.txt > HDR.hdr
+
 For best results capture tripod mounted sequences with shutter speed varying by
 one full stop (3 clicks) between frames, beginning with no white pixels
 (or upper limit found in calibration) and ending with no black pixels. Most dSLR cameras have
 a histogram display with the image preview to aid with this. ISO and aperture should be kept
 constant, although in theory these will be properly compensated for. White balance should also
 be held constant with any pre-calibration values. Always use the --scale value associated with the
-particular camera and lens, as well as the --saturation-offset identified during calibration.
+particular camera and lens, as well as the --saturation-offset and --range identified during calibration.
 
 linearhdr --help::
 
     linearhdr [Options] [exposure_list]
     Options:
         [--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.2
-        [--range, -r <val>]: dynamic range of single raw exposure, used to set lower cutoff,
-            give as power of 2 default=6.64386
+        [--range, -r <val>]: lower range of single raw exposure, used to set lower cutoff,
+            give as value between 0 and 0.25, default=0.01
         [--deghosting, -d <val>]: relative difference for outlier detection when less than 1,
             otherwise absolute difference (good for clouds) default=OFF
         [--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak,
@@ -168,7 +179,7 @@ linearhdr --help::
      (but with less accuracy) so make sure to use the --exact flag so shutter
     and aperture are not double corrected.
 
-The "range" option can be used to set the lowend acceptable value, by default and raw values below .01 (2^-6.64386)
+The "range" option can be used to set the low end acceptable value, by default and raw values below .01
 are counted out of ranges, but for some raw images with higher bit depth there may be useful information in
 this low end that could reduce noise. Alternative, low bit depth or less reliable cameras may be too noisy in this
 range to provide useful signal:noise ratios. by extending the range parameter, it is possible to build HDR images from

@@ -84,7 +84,6 @@ int linear_Response(pfs::Array2D *out[],
     // number of exposures
     int N = imgs[0]->size();
 
-
     // frame size
     int width = out[0]->getCols();
     int height = out[0]->getRows();
@@ -103,7 +102,7 @@ int linear_Response(pfs::Array2D *out[],
         bool under[3] = {false, false, false};
 
         float X[3][N];
-        float w[N];
+        float w[3][N];
         bool saturated_exp[3][N];
         bool under_exp[3][N];
         bool skip_exp[N];
@@ -115,17 +114,17 @@ int linear_Response(pfs::Array2D *out[],
 
         // First compute scene radiances
         for (int i = 0; i < N; i++) {
-            w[i] = 0;
             for (int cc = 0; cc < 3; cc++) {
+                w[cc][i] = 0;
                 const Exposure &expo = (*imgs[cc])[i];
                 if (lead_channel < 0 || cc == lead_channel) {
                     X[cc][i] = (*expo.yi)(j) * get_exposure_compensationX(expo) * scale;
-                    w[i] += get_weight((*expo.yi)(j));
+                    w[cc][i] += get_weight((*expo.yi)(j));
 
                     saturated_exp[cc][i] = (*expo.yi)(j) >= 1 - opt_saturation_offset;
                     under_exp[cc][i] = (*expo.yi)(j) <= opt_black_offset;
                     if (saturated_exp[cc][i] || under_exp[cc][i])
-                        w[i] = 0;
+                        w[cc][i] = 0;
                     else
                         ref = i;
                 } else {
@@ -173,36 +172,39 @@ int linear_Response(pfs::Array2D *out[],
             float sum = 0.0f;
             float div = 0.0f;
             bool all_under = true;
+            bool all_over = true;
             int pc = lead_channel;
             if (lead_channel < 0)
                 pc = cc;
             // For each exposure
             for (int i = 0; i < N; i++) {
                 all_under &= under_exp[pc][i];
-
+                all_over &= saturated_exp[pc][i];
                 if (!(saturated_exp[pc][i] || under_exp[pc][i] || (deghosting_value != -1 && skip_exp[i]))) {
-                    sum += X[cc][i] * w[i];
-                    div += w[i];
+                    sum += X[cc][i] * w[pc][i];
+                    div += w[pc][i];
                 }
             }
-            if (div >= 1e-15) {
+            if (all_under) {
+                (*out[cc])(j) = -2;
+                under[cc] = true;
+            } else if (all_over) {
+                (*out[cc])(j) = -1;
+                saturated[cc] = true;
+            } else if (div >= 1e-15) {
                 (*out[cc])(j) = sum / div;
                 mmax[cc] = (mmax[pc] > (*out[pc])(j)) ? mmax[cc] : (*out[cc])(j);
                 mmin[cc] = (mmin[pc] < (*out[pc])(j)) ? mmin[cc] : (*out[cc])(j);
-            } else if (all_under) {
-                (*out[cc])(j) = -2;
-                under[cc] = true;
-            } else {
-                (*out[cc])(j) = -1;
-                saturated[cc] = true;
             }
         }
+
         if (under[0] || under[1] || under[2]) {
             under_pixels++;
         }
         if (saturated[0] || saturated[1] || saturated[2]) {
             saturated_pixels++;
         }
+
     }
     // Fill in nan values NOTE: removed normalization here
     for (int j = 0; j < width * height; j++)
