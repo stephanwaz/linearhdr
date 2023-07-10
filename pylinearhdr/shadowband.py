@@ -26,7 +26,7 @@ def blend_bands(x, b, c=None):
     return np.where(x > b, np.where(x < b+c, np.cos((x-b)*np.pi/c)/2+.5, 0), 1)
 
 
-def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=180.0, srcsize=6.7967e-05, bw=2.0, flip=False):
+def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=180.0, srcsize=6.7967e-05, bw=2.0, flip=False, envmap=False):
     vm = ViewMapper(viewangle=180)
     res = hdata.shape[-1]
     band = bw/vm.viewangle*res
@@ -119,9 +119,12 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=180.0, srcsize=6.7967
     flare[flare < 0] = 0
     sol_luminance = np.sum(flare * omega[None, vm_valid], axis=1) / srcsize
 
-    # draw source on image
-    mask = vm.in_view(v)
-    src = SrcViewPoint(None, np.asarray(pxyz).reshape(-1, 3), sol_luminance, res=1)
-    src.add_to_img(blend, v, mask, vm=vm)
+    if envmap:
+        return blend, (*pxyz, srcsize, sol_luminance)
+    else:
+        # draw source on image
+        mask = vm.in_view(v)
+        src = SrcViewPoint(None, np.asarray(pxyz).reshape(-1, 3), sol_luminance, res=1)
+        src.add_to_img(blend, v, mask, vm=vm)
 
-    return blend
+        return blend

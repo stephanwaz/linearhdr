@@ -56,9 +56,9 @@ def report(ppms, s=False, l=False, scale=1, sat_w=0.8, sat_b=.01):
             fmax = scale * 100 * ap * ap * sh / iso
             print(f"{ppm} {time} {iso} {ap:.03f} {1/sh:.08f} {sh:.02f} = {sat_b*fmax:.02f} to {sat_w*fmax:.02f}", file=sys.stderr)
         elif s:
-            print(f"pfsin {ppm} | pfstag --set 'ISO={iso}' --set 'aperture={ap:.03f}' --set 'exposure_time={1/sh:.08f}'")
+            print(f"pfsin {ppm} | pfstag --set 'ISO={iso/scale}' --set 'aperture={ap:.03f}' --set 'exposure_time={1/sh:.08f}'")
         else:
-            print(f"{ppm} {iso} {ap:.03f} {1/sh:.08f}")
+            print(f"{ppm} {iso/scale} {ap:.03f} {1/sh:.08f}")
 
 
 def main(*imgs, s=False, c=False, o=False, l=False):
