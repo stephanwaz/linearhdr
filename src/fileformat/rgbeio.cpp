@@ -44,7 +44,7 @@ using namespace std;
 void readRadianceHeader( FILE *file, int &width, int &height, float &exposure );
 void readRadiance( FILE *file, int width, int height, float exposure,
 		   pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z );
-void writeRadiance(FILE *file, pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z, bool radiance_compatibility = false );
+void writeRadiance(FILE *file, pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z, bool radiance_compatibility = false, std::string comment = "" );
 
 
 //---
@@ -69,9 +69,9 @@ RGBEReader::~RGBEReader()
   //TODO: empty
 }
 
-void RGBEWriter::writeImage( pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z )
+void RGBEWriter::writeImage( pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z, std::string comment )
 {
-	writeRadiance(fh, X, Y, Z, radiance_compatibility);
+	writeRadiance(fh, X, Y, Z, radiance_compatibility, comment);
 }
 
 
@@ -388,7 +388,7 @@ int RLEWrite( FILE* file, Trgbe* scanline, int size )
 
 
 
-void writeRadiance(FILE *file, pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z, bool radiance_compatibility )
+void writeRadiance(FILE *file, pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z, bool radiance_compatibility, std::string comment)
 {
   int width = X->getCols();
   int height = X->getRows();
@@ -403,7 +403,7 @@ void writeRadiance(FILE *file, pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z
 
   // header information
   fprintf(file, "#?RADIANCE\n");	// file format specifier
-  fprintf(file, "# PFStools writer to Radiance RGBE format\n");
+  fprintf(file, "%s", comment.c_str());
 
 //    if( exposure_isset )
 //      fprintf(file, "EXPOSURE=%f\n", exposure);

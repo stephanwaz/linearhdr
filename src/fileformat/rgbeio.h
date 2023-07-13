@@ -67,7 +67,7 @@ public:
     {
     }
     
-  void writeImage( pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z );
+  void writeImage( pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z, std::string comment );
 };
 
 #endif

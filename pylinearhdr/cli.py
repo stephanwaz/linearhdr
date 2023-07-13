@@ -1,5 +1,6 @@
 import os
 import shutil
+import sys
 
 import numpy as np
 from clasp import click
@@ -60,6 +61,8 @@ def calibrate(ctx, imgs, crop, badpixels=None, hdropts="", **kwargs):
               help="output shell file for use with stdin of linearhdr: bash output.sh | linearhdr")
 @click.option("--overwrite/--no-overwrite", default=False,
               help="run dcraw_emu even if output file exists")
+@click.option("-header-line", '-hl', multiple=True,
+              help="lines to append to HDR header, e.g. LOCATION= 46.522833,6.580500")
 @click.option("--correct/--no-correct", default=False,
               help="apply correction to nominal aperture and shutter speed values, use with linearhdr --exact")
 @click.option("--listonly/--no-listonly", default=False,
@@ -74,7 +77,7 @@ def calibrate(ctx, imgs, crop, badpixels=None, hdropts="", **kwargs):
               help="file of bad pixels (rows: xpix ypix 0) where xpix is from left and ypix is from top")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def makelist(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.2, r=0.01,
-             crop=None, badpixels=None, **kwargs):
+             crop=None, badpixels=None, header_line=None, **kwargs):
     """make list routine, use to generate input to linearhdr"""
     if listonly:
         shell = False
@@ -82,6 +85,9 @@ def makelist(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=Fa
         overwrite = False
     ppms = pool_call(ml.get_raw_frame, imgs, correct=correct, overwrite=overwrite,
                      listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False)
+    print(ml.header_info(imgs[0]))
+    for li in header_line:
+        print(f"# {li}")
     ml.report(ppms, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=r)
 
 

@@ -291,7 +291,7 @@ void pfshdrraw(int argc, char *argv[]) {
     ExposureList imgsB;
 
     pfs::ColorSpace hdr_target = yuv ? pfs::CS_YUV : pfs::CS_RGB;
-
+    std::stringstream header;
     while (true) {
         pmax = 0;
         pfs::Frame *iframe = nullptr;
@@ -307,7 +307,17 @@ void pfshdrraw(int argc, char *argv[]) {
             std::string line, framefile;
             if (std::getline(infile, line)) {
                 std::istringstream iss(line);
-                if (!(iss >> framefile >> info.iso >> info.aperture >> info.etime)) { continue;}
+                if (!(iss >> framefile)){
+                    continue;
+                }
+                if (!(iss >> info.iso >> info.aperture >> info.etime)) {
+                    if (framefile.at(0) == '#') {
+                        std::string comment = iss.str();
+                        const uint begin =  comment.find_first_not_of("# \t");
+                        header << comment.substr(begin, comment.size()) << endl;
+                    }
+                    continue;
+                }
                 if (nominal)
                     info = correct_exposure(info);
                 info.factor = opt_scale * 100.0f * info.aperture * info.aperture / ( info.iso * info.etime );
@@ -367,7 +377,10 @@ void pfshdrraw(int argc, char *argv[]) {
                         pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
                         float below = min((*X)(i), (*Y)(i), (*Z)(i)) < opt_black_offset_perc;
                         float above = max((*X)(i), (*Y)(i), (*Z)(i)) > 1 - opt_saturation_offset_perc;
-                        float lum = (0.265074126*(*X)(i) + 0.670114631*(*Y)(i) + 0.064811243*(*Z)(i)) * fmax;
+                        // which are correct? radiance (equal energy primaries) (first)
+//                        float lum = (0.265074126*(*X)(i) + 0.670114631*(*Y)(i) + 0.064811243*(*Z)(i)) * fmax;
+                        // or sRGB primaries?
+                        float lum = (0.2126*(*X)(i) + 0.7152*(*Y)(i) + 0.0722*(*Z)(i)) * fmax;
                         std::cout << (*X)(i) * fmax << "\t" << (*Y)(i) * fmax << "\t" << (*Z)(i) * fmax << "\t" << lum << "\t" << below << "\t" << above << std::endl;
                     }
                 }
@@ -417,7 +430,9 @@ void pfshdrraw(int argc, char *argv[]) {
     if (frame_no < 1)
         throw pfs::Exception("at least one image required for calibration (check paths in hdrgen script?)");
 
-    VERBOSE_STR << "using " << frame_no  << " frames, range min:" << gmin << ", max:" << gmax <<  endl;
+    header << "HDR_SEQUENCE_COUNT= " << frame_no << endl;
+    header << "HDR_VALID_RANGE= " << std::setprecision(3) << gmin << "-" << gmax << " cd/m^2" << endl;
+    VERBOSE_STR << "using " << frame_no  << std::setprecision(3) << " frames, range min:" << gmin << ", max:" << gmax <<  endl;
 
     if (oorange) {
         VERBOSE_STR << "Warning: some pixels out of range..."  <<  endl;
@@ -450,7 +465,8 @@ void pfshdrraw(int argc, char *argv[]) {
     if (rgbe){
         RGBEWriter writer( stdout, true );
         pfs::transformColorSpace( hdr_target, Xj, Yj, Zj, pfs::CS_RGB, Xj, Yj, Zj );
-        writer.writeImage( Xj, Yj, Zj );
+        std::string hstring = header.str().substr(0,-1);
+        writer.writeImage( Xj, Yj, Zj, hstring );
     } else {
         pfs::transformColorSpace(hdr_target, Xj, Yj, Zj, pfs::CS_XYZ, Xj, Yj, Zj);
         pfsio.writeFrame(frame, stdout);

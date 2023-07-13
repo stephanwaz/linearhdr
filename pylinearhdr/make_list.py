@@ -7,7 +7,7 @@ from math import log2
 from subprocess import Popen, PIPE
 
 
-def info_from_exif(img, correct, times=False):
+def info_from_exif(img, correct, times=True):
     exifl = f"-ISO -ShutterSpeed -Aperture"
     if times:
         exifl += " -CreateDate"
@@ -30,6 +30,14 @@ def info_from_exif(img, correct, times=False):
         time = None
     return shutter, aperture, iso, time
 
+def header_info(img, fields=("ColorTempAsShot", "Colorspace")):
+    fs = " ".join([f"-{i}" for i in fields])
+    hinfo = Popen(shlex.split(f"exiftool {fs} -s {img}"),
+                    stdout=PIPE).communicate()[0].decode(sys.stdin.encoding)
+    hinfo = re.sub(r"\s+:\s+", "= ", hinfo)
+    hinfo = "\n".join([f"# HDR_{i.strip()}" for i in hinfo.strip().splitlines(keepends=False)])
+    return hinfo
+
 
 def get_raw_frame(img, correct=False, overwrite=False, listonly=False, crop=None, bad_pixels=None):
     ppm = img + ".ppm"
@@ -42,7 +50,7 @@ def get_raw_frame(img, correct=False, overwrite=False, listonly=False, crop=None
         if bad_pixels is not None:
             cs += f" -P {bad_pixels}"
         Popen(shlex.split(f"dcraw_emu -4 -o 1 {cs} -Z {ppm} -w {img}")).communicate()
-    rawinfo = info_from_exif(img, correct, times=listonly)
+    rawinfo = info_from_exif(img, correct)
     return ppm, *rawinfo
 
 
@@ -51,6 +59,10 @@ def report(ppms, s=False, l=False, scale=1, sat_w=0.8, sat_b=.01):
         print(f"Name Date ISO aperture etime shutter luminance range", file=sys.stderr)
     else:
         ppms = sorted(ppms, key=lambda x: x[1])
+        if not s:
+            capdate = sorted([ppms[0][-1].strip(), ppms[-1][-1].strip()])
+            stop = capdate[-1].rsplit(" ", 1)[1]
+            print(f"# CAPDATE= {capdate[0]}-{stop}")
     for ppm, sh, ap, iso, time in ppms:
         if l:
             fmax = scale * 100 * ap * ap * sh / iso
