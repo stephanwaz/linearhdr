@@ -7,14 +7,12 @@ from subprocess import Popen
 import numpy as np
 from clasp import click
 import clasp.click_ext as clk
-from clasp.script_tools import try_mkdir, clean_tmp
+from clasp.script_tools import try_mkdir, clean_tmp, pipeline
 
 import pylinearhdr
 import raytools
 from raytools import io, imagetools
 from raytools.utility import pool_call
-from pylinearhdr import calibrate as ca
-from pylinearhdr import make_list as ml
 from pylinearhdr import shadowband as sb
 from pylinearhdr import pylinearhdr as pl
 
@@ -59,7 +57,7 @@ shared_run_opts = [
     click.option("-badpixels", callback=is_file_or_tup_int,
                                 help="file of bad pixels (rows: xpix ypix 0) where xpix is from left and ypix is "
                                      "from top or list of bad pixes x1,y1 x2,y2 etc."),
-    click.option("-black", default="AverageBlackLevel",
+    click.option("-black", default="PerChannelBlackLevel",
                 help="dcraw_emu darkness level. either a number(s) or exiftool key, it is critical this is kept "
                      "consistent between calibration and make_list/run. Possible options: AverageBlackLevel, "
                      "PerChannelBlackLevel, 2049 '2049 2049 2049 2049'"),
@@ -70,7 +68,15 @@ shared_run_opts = [
     click.option("-wp",
                  help="If not given uses as shot (exiftool -WB_RGGBLevelsAsShot, reordered to RGB. "
                       "Make sure to add multiple G channels. This should correspond to D65 for"
-                      " standard luminance efficacy / XYZ conversion. For example: 2351 1024 1024 1533 becomes 2351 2048 1533")
+                      " standard luminance efficacy / XYZ conversion. For example: 2351 1024 1024 1533 becomes 2351 2048 1533"),
+    click.option("-fo", "-f-overrides", callback=clk.tup_float,
+                 help="if given, sets --correct to True. pairs of nominal/exact aperture values to correct. any aperture"
+                      " not given will use the standard correction. for example give 11,11.4 22,23 to override standard"
+                      " corrections for F11 and F22 (would be 11.31 and 22.63)"),
+    click.option("-scale", default=1.0, help="calibration scale factor (applies to ISO, so do not use -s with linearhdr)"),
+    click.option("-nd", default=0.0, help="additional ND filter (applies to ISO, so do not use -s with linearhdr)"),
+    click.option("-saturation", "-saturation-offset", "-s", default=0.01, help="saturation offset, if white is not LinearityUpperMargin, this must be changed"),
+    click.option("-range", "-r", default=0.01, help="lower range of single raw exposure"),
 ]
 
 
@@ -80,70 +86,70 @@ shared_run_opts = [
 @click.option("-hdropts", default="", help="options to pass to linearhdr (put in qoutes)")
 @clk.shared_decs(shared_run_opts)
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def calibrate(ctx, imgs, crop, badpixels=None, hdropts="", black="AverageBlackLevel", white="AverageBlackLevel", wp=None, **kwargs):
+def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.01, range=0.01, hdropts="",
+              black="AverageBlackLevel", white="AverageBlackLevel",
+              wp=None, fo=None, **kwargs):
     """calibration routine, see README.rst
 
     imgs: list of images
     crop: help="<left> <upper> <width> <height>"
     """
-    ppms = pool_call(ca.get_raw_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black, white=white, wp=wp)
-    ca.report(ppms)
+    ppms = pool_call(pl.calibrate_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black,
+                     white=white, wp=wp, fo=fo, scale=scale * 10**nd, saturation=saturation, r=range)
+    pl.report_calibrate(ppms)
 
 
 make_list_opts = [
      click.argument("imgs", callback=clk.are_files),
      click.option("--shell/--no-shell", default=False,
                    help="output shell file for use with stdin of linearhdr: bash output.sh | linearhdr"),
+    click.option("--fisheye/--no-fisheye", default=False,
+                 help="apply fisheye_corr to 180 degree image (must be properly cropped and equiangular). "
+                      "requires pcomb and RAYPATH"),
      click.option("--overwrite/--no-overwrite", default=False,
                    help="run dcraw_emu even if output file exists"),
      click.option("-header-line", '-hl', multiple=True,
                    help="lines to append to HDR header, e.g. LOCATION= 46.522833,6.580500"),
-     click.option("--correct/--no-correct", default=False,
+     click.option("--correct/--no-correct", default=True,
                    help="apply correction to nominal aperture and shutter speed values, use with linearhdr --exact"),
      click.option("--listonly/--no-listonly", default=False,
                    help="skip execution and just print metadata"),
      click.option("-hdropts", default="", help="additional options to linearhdr (with callhdr, overrides -r -s)"),
-     click.option("-scale", default=1.0, help="calibration scale factor (applies to ISO, so do not use -s with linearhdr)"),
-     click.option("-nd", default=0.0, help="additional ND filter (applies to ISO, so do not use -s with linearhdr)"),
-     click.option("-saturation", "-saturation-offset", "-s", default=0.2, help="saturation offset"),
-     click.option("-r", "-range", default=0.01, help="lower range of single raw exposure"),
      click.option("-crop", callback=clk.split_int,
                    help="crop ppm (left upper W H)"),
-     click.option("-overrides", callback=clk.is_file,
-                   help="if given, sets --correct to True. file of camera specific aperture/shutter corrections. each row"
-                        "should have two columns, (nominal exact) where nominal gives the value (preceded by F for aperture)"
-                        "matching the output of exiftool -Aperture -ShutterSpeed. You only list settings with non standard "
-                        "corrections. For example, if F22.0 is not well approximated by the standard correction 22.63,"
-                        "include a row: F22.0 22.9, like wise if a shutter speed of 15 is not truly 1/16, and 0.5 is not truly 1/")
 ]
 
 
-def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.2, r=0.01,
-                 crop=None, badpixels=None, callhdr=False, hdropts="",
+def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
+                 crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False,
                  black="AverageBlackLevel", white="AverageBlackLevel", wp=None, **kwargs):
     """make list routine, use to generate input to linearhdr"""
     outf = sys.stdout
     if listonly:
         shell = False
-        correct = True
         overwrite = False
     elif callhdr:
         outfn = clean_tmp(ctx)
         outf = open(outfn, 'w')
-        if correct:
-            hdropts += " --exact"
-    ppms = pool_call(ml.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white,
+        if not correct:
+            hdropts += " --nominal"
+    ppms = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo,
                      listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False)
-    print(ml.header_info(imgs[0]), file=outf)
     if wp is None:
-        wp = ml.process_dcraw_opt("WB_RGGBLevelsAsShot", imgs[0])
+        print(pl.header_info(imgs[0]), file=outf)
+        wp = pl.process_dcraw_opt("WB_RGGBLevelsAsShot", imgs[0])
+    else:
+        print(pl.header_info(imgs[0], ("ColorSpace",)), file=outf)
     wp = [int(i) for i in wp.split()]
     wp = " ".join([str(i/wp[1]) for i in wp])
     print(f"# RGB_correction= {wp}", file=outf)
-    ml.report(ppms, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=r, outf=outf)
+    pl.report(ppms, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
     if callhdr:
         outf.close()
-        Popen(shlex.split(f"linearhdr -r {r} -o {saturation} {hdropts} {outfn}")).communicate()
+        command = [f"linearhdr -r {range} -o {saturation} {hdropts} {outfn}"]
+        if fisheye:
+            command += ["pcomb -f fisheye_corr.cal -o - ", "getinfo -a 'VIEW= -vta -vh 180 -vv 180'"]
+        pipeline(command, outfile=sys.stdout)
         clk.tmp_clean(ctx)
 
 
@@ -237,7 +243,7 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, **
     if r:
         rename.callback(imgs, **kwargs)
         imgs = ctx.obj['imgs']
-    infos = pool_call(ml.get_raw_frame, imgs, listonly=True, correct=True, expandarg=False)
+    infos = pool_call(pl.get_raw_frame, imgs, listonly=True, correct=True, expandarg=False)
     i = starti
     if ascend:
         expt = 1e9
@@ -288,7 +294,7 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, **
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def rename(ctx, imgs, out=None, **kwargs):
     """rename raw files based on ISO_APERTURE_SHUTTER_CCT"""
-    infos = pool_call(ml.name_by_exif, imgs, expandarg=False, prefix=out)
+    infos = pool_call(pl.name_by_exif, imgs, expandarg=False, prefix=out)
     copied = []
     for orig, dest in zip(imgs, infos):
         dest2 = dest

@@ -139,8 +139,8 @@ void printHelp() {
                     "\t[--cull, -c]: throw away extra exposures that are not needed to keep output in range\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
                     "\t[--pfs, -P]: output pfs stream\n"
-                    "\t[--exact, -e]: input camera values interpreted as exact (default=False)\n"
-                    "\t[--nominal, -n]: input camera values interpreted as nominal (default=True)\n"
+                    "\t[--exact, -e]: input camera values interpreted as exact (default=True)\n"
+                    "\t[--nominal, -n]: input camera values interpreted as nominal (default=False)\n"
                     "\t[--verbose, -v]\n\t[--help]\n\n"
                     "If exposure_list is given, images are read from file formatted as:\n"
                     "\t<image1.ppm> <iso> <aperture> <exposure_time>\n"
@@ -168,7 +168,7 @@ void pfshdrraw(int argc, char *argv[]) {
     bool keep = true;
     bool dataonly = false;
     bool rgbe = true;
-    bool nominal = true;
+    bool nominal = false;
     float oor_high = 1e-30;
     float oor_low = 1e30;
     float rgb_corr[3] = {1.0, 1.0, 1.0};

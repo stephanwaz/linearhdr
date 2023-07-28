@@ -37,8 +37,8 @@ make sure that your install location is in you $PATH
 This will install three programs::
 
     linearhdr: the main c++ executable
-    linearhdr_make_list: a python helper script to generate input sequence files
-    linearhdr_calibrate: a python script for determining a camera/lens/whitebal scale factor (linearhdr -s)
+    convertcolor: a utility compatible with pfstools
+    linearhdr_extract: a shell script for processing image regions
 
 
 Additional optional python scripts can be installed with::
@@ -49,8 +49,7 @@ this will install::
 
     pylinearhdr
 
-Which, in addition to replicating the linearhdr_make_list, linearhdr_calibrate functionality with additional features and
-multicore processing, additional tools, such as shadowband merging are available. see pylinearhdr --help for all options
+see pylinearhdr --help for all options
 
 Calibration
 -----------
