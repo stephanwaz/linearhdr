@@ -26,18 +26,22 @@ def blend_bands(x, b, c=None):
     return np.where(x > b, np.where(x < b+c, np.cos((x-b)*np.pi/c)/2+.5, 0), 1)
 
 
-def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=180.0, srcsize=6.7967e-05, bw=2.0, flip=False, envmap=False):
+def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=180.0, srcsize=6.7967e-05, bw=2.0, flip=False,
+               envmap=False, sunloc=None):
     vm = ViewMapper(viewangle=180)
     res = hdata.shape[-1]
     band = bw/vm.viewangle*res
 
-    # find peak in sdata (un shaded image)
     v = vm.pixelrays(res).reshape(-1, 3)
     omega = vm.pixel2omega(vm.pixels(res), res).ravel()
     lum = np.squeeze(sdata.reshape(-1, res**2))
     if lum.shape[0] == 3:
         lum = io.rgb2rad(lum.T)
-    pxyz = im.find_peak(v, omega, lum, peaka=srcsize)[0][0]
+    # find peak in sdata (un shaded image)
+    if sunloc is not None:
+        pxyz = vm.pixel2ray(np.array(sunloc[0:2])[None], res)
+    else:
+        pxyz = im.find_peak(v, omega, lum, peaka=srcsize)[0][0]
 
     # calculate profile angles relative to shadow bands
     sangles = profile_angles(pxyz, roh, rov).reshape(1, 1, 2)

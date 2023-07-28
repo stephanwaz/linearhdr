@@ -77,7 +77,6 @@ int linear_Response(pfs::Array2D *out[],
                    const float opt_black_offset,
                    float deghosting_value,
                    const float scale,
-                   const int lead_channel = -1,
                    const float oor_high = 1e-30,
                    const float oor_low = 1e30){
 
@@ -103,9 +102,11 @@ int linear_Response(pfs::Array2D *out[],
 
         float X[3][N];
         float w[3][N];
-        bool saturated_exp[3][N];
-        bool under_exp[3][N];
+        bool saturated_exp[N];
+        bool under_exp[N];
         bool skip_exp[N];
+        fill(saturated_exp, saturated_exp + N, false);
+        fill(under_exp, under_exp + N, false);
         fill(skip_exp, skip_exp + N, false);
 
         // track reference frame for deghosting
@@ -117,26 +118,17 @@ int linear_Response(pfs::Array2D *out[],
             for (int cc = 0; cc < 3; cc++) {
                 w[cc][i] = 0;
                 const Exposure &expo = (*imgs[cc])[i];
-                if (lead_channel < 0 || cc == lead_channel) {
-                    X[cc][i] = (*expo.yi)(j) * get_exposure_compensationX(expo) * scale;
-                    w[cc][i] += get_weight((*expo.yi)(j));
-
-                    saturated_exp[cc][i] = (*expo.yi)(j) >= 1 - opt_saturation_offset;
-                    under_exp[cc][i] = (*expo.yi)(j) <= opt_black_offset;
-                    if (saturated_exp[cc][i] || under_exp[cc][i])
-                        w[cc][i] = 0;
-                    else
-                        ref = i;
-                } else {
-                    X[cc][i] = (*expo.yi)(j);
-                    saturated_exp[cc][i] = false;
-                    under_exp[cc][i] = false;
-                }
-
+                X[cc][i] = (*expo.yi)(j) * get_exposure_compensationX(expo) * scale;
+                w[cc][i] += get_weight((*expo.yi)(j));
+                saturated_exp[i] = (*expo.yi)(j) >= 1 - opt_saturation_offset || saturated_exp[i];
+                under_exp[i] = (*expo.yi)(j) <= opt_black_offset || under_exp[i];
             }
-            // use first (slowest) exposure (least noise as reference frame for deghosting)
-            if (!foundref && !saturated_exp[0][i] && !saturated_exp[1][i] && !saturated_exp[2][i] &&
-                    !under_exp[0][i] && !under_exp[1][i] && !under_exp[2][i]){
+            if (saturated_exp[i] || under_exp[i]){
+                w[0][i] = 0;
+                w[1][i] = 0;
+                w[2][i] = 0;
+            } else if (!foundref){
+                // use first (slowest) exposure (least noise as reference frame for deghosting)
                 ref = i;
                 foundref = true;
             }
@@ -151,15 +143,13 @@ int linear_Response(pfs::Array2D *out[],
                     float deviation_from_ref = 0;
                     for (int cc = 0; cc < 3; cc++) {
                         //deghost only on luminance unless RGB
-                        if (lead_channel < 0 || cc == lead_channel) {
-                            //use absolute deviation
-                            if (deghosting_value >= 1)
-                                deviation_from_ref = max(deviation_from_ref,
-                                                         fabs((float) (X[cc][i] - X[cc][ref])));
-                            else
-                                deviation_from_ref = max(deviation_from_ref,
-                                                         fabs((float) (1 - X[cc][i] / X[cc][ref])));
-                        }
+                        //use absolute deviation
+                        if (deghosting_value >= 1)
+                            deviation_from_ref = max(deviation_from_ref,
+                                                     fabs((float) (X[cc][i] - X[cc][ref])));
+                        else
+                            deviation_from_ref = max(deviation_from_ref,
+                                                     fabs((float) (1 - X[cc][i] / X[cc][ref])));
                     }
                     skip_exp[i] = deviation_from_ref > deghosting_value;
                     if (skip_exp[i])
@@ -173,16 +163,14 @@ int linear_Response(pfs::Array2D *out[],
             float div = 0.0f;
             bool all_under = true;
             bool all_over = true;
-            int pc = lead_channel;
-            if (lead_channel < 0)
-                pc = cc;
+
             // For each exposure
             for (int i = 0; i < N; i++) {
-                all_under &= under_exp[pc][i];
-                all_over &= saturated_exp[pc][i];
-                if (!(saturated_exp[pc][i] || under_exp[pc][i] || (deghosting_value != -1 && skip_exp[i]))) {
-                    sum += X[cc][i] * w[pc][i];
-                    div += w[pc][i];
+                all_under &= under_exp[i];
+                all_over &= saturated_exp[i];
+                if (!(saturated_exp[i] || under_exp[i] || (deghosting_value != -1 && skip_exp[i]))) {
+                    sum += X[cc][i] * w[cc][i];
+                    div += w[cc][i];
                 }
             }
             if (all_under) {
@@ -193,8 +181,8 @@ int linear_Response(pfs::Array2D *out[],
                 saturated[cc] = true;
             } else if (div >= 1e-15) {
                 (*out[cc])(j) = sum / div;
-                mmax[cc] = (mmax[pc] > (*out[pc])(j)) ? mmax[cc] : (*out[cc])(j);
-                mmin[cc] = (mmin[pc] < (*out[pc])(j)) ? mmin[cc] : (*out[cc])(j);
+                mmax[cc] = (mmax[cc] > (*out[cc])(j)) ? mmax[cc] : (*out[cc])(j);
+                mmin[cc] = (mmin[cc] < (*out[cc])(j)) ? mmin[cc] : (*out[cc])(j);
             }
         }
 

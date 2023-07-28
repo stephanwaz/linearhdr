@@ -14,10 +14,10 @@ else()
     target_link_libraries(linearhdr pfs)
 endif()
 
-add_executable(colorchange colorchange.cpp "${GETOPT_OBJECT}")
-target_link_libraries(colorchange pfs)
+add_executable(convertcolor convertcolor.cpp ../fileformat/rgbeio.cpp "${GETOPT_OBJECT}")
+target_link_libraries(convertcolor pfs)
 
 message(STATUS ${CMAKE_INSTALL_PREFIX})
 
 install (TARGETS linearhdr DESTINATION bin)
-install (TARGETS colorchange DESTINATION bin)
+install (TARGETS convertcolor DESTINATION bin)

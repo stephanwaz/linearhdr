@@ -23,18 +23,43 @@ def info_from_exif(img):
     return shutter, aperture, iso
 
 
-def get_raw_frame(img, u, l, w, h, opts, bad_pixels):
+def process_dcraw_opt(val, img, callexif=True):
+    try:
+        return int(val)
+    except ValueError:
+        pass
+    try:
+        vals = " ".join([str(int(i)) for i in val.strip().split()])
+    except ValueError:
+        pass
+    else:
+        return f"'{vals}'"
+    if callexif:
+        rawinfo = Popen(shlex.split(f"exiftool -{val} -s {img}"),
+                        stdout=PIPE).communicate()[0].decode(sys.stdin.encoding).split(":", 1)[1].strip()
+        return process_dcraw_opt(rawinfo, img, False)
+    raise ValueError(f"Bad option given '{val}' could not be processed as a exiftool parameter")
+
+
+def get_raw_frame(img, u, l, w, h, opts, bad_pixels, black="AverageBlackLevel", white="LinearityUpperMargin", wp=None):
+    black = process_dcraw_opt(black, img)
+    white = process_dcraw_opt(white, img)
+    if wp is None:
+        wp = process_dcraw_opt("WB_RGGBLevelsAsShot", img)
+    wp = [int(i) for i in wp.split()]
+    wp = " ".join([str(i/wp[1]) for i in wp])
     ppm = img + "_calibrate.ppm"
     cs = ""
     if bad_pixels is not None:
         cs += f"-P {bad_pixels}"
-    Popen(shlex.split(f"dcraw_emu -4 -o 1 -B {u} {l} {w} {h} {cs} -w -Z {ppm} {img}")).communicate()
+    Popen(shlex.split(f"dcraw_emu -c 0 -4 -o 0 -B {u} {l} {w} {h} {cs} -k {black} -r 2 1 2 1 -S {white} -Z {ppm} {img}")).communicate()
     sh, ap, iso = info_from_exif(img)
     txt = img + "_calibrate.txt"
     f = open(txt, 'w')
+    print(f"# RGB_correction= {wp}", file=f)
     print(f"{ppm} {iso} {ap:.03f} {1/sh:.08f}", file=f)
     f.close()
-    f = Popen(shlex.split(f"linearhdr {opts} --use-rgb --tsv {txt}"), stdout=PIPE)
+    f = Popen(shlex.split(f"linearhdr {opts} --tsv {txt}"), stdout=PIPE)
     vals = Popen(shlex.split("total -m"), stdin=f.stdout, stdout=PIPE).communicate()[0].split()
     vals = [float(i) for i in vals] + [float(vals[-2]) + float(vals[-1])]
     os.remove(ppm)
@@ -47,6 +72,9 @@ def report(ppms):
     div = 0
     minv = 1e9
     maxv = 0
+
+    print("image\tiso\taperture\texposure_time\tsat_red\tsat_green\tsat_blue\tred\tgreen\tblue\tlum(assumes_D65)\tfrac_above\tfrac_below\tfrac_oor")
+
     for ppm, sh, ap, iso, rgb in sorted(ppms, key=lambda x: x[1]):
         print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04f}" for i in rgb]))
         if rgb[-2] == 0 and rgb[-1] == 0:

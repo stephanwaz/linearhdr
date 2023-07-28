@@ -38,6 +38,7 @@
 
 #include <iostream>
 #include <vector>
+#include <iomanip>
 
 #include <cstdio>
 #include <cstdlib>
@@ -130,13 +131,11 @@ void printHelp() {
                     "\n\t\totherwise absolute difference (good for clouds) default=OFF\n"
                     "\t[--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak,"
                     "\n\t\tdo not use with large files!\n"
-                    "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
                     "\t[--oor-low, -m <val>]: value to use for out of range low, default from data\n"
                     "\t[--oor-high, -x <val>]: value to use for out of range high, default from data\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
                     "\t\tuse linearhdr_calibrate to calculate\n"
-                    "\t[--use-yuv, -L]: merge hdr in YUV space instead of RGB (default)\n"
-                    "\t[--use-rgb, -C]: merge hdr in RGB space instead of YUV\n"
+                    "\t[--colorcorr, -k]: color correction coefficients\n"
                     "\t[--cull, -c]: throw away extra exposures that are not needed to keep output in range\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
                     "\t[--pfs, -P]: output pfs stream\n"
@@ -166,14 +165,13 @@ void pfshdrraw(int argc, char *argv[]) {
     float opt_black_offset_perc = 0.01;
     float opt_deghosting = -1;
     float opt_scale = 1.0f;
-    bool yuv = true;
     bool keep = true;
-    int lead_channel = 0;
     bool dataonly = false;
     bool rgbe = true;
     bool nominal = true;
     float oor_high = 1e-30;
     float oor_low = 1e30;
+    float rgb_corr[3] = {1.0, 1.0, 1.0};
 
     /* helper */
     int c;
@@ -181,9 +179,8 @@ void pfshdrraw(int argc, char *argv[]) {
     static struct option cmdLineOptions[] = {
             {"help",       no_argument,       nullptr, 'h'},
             {"verbose",    no_argument,       nullptr, 'v'},
-            {"use-yuv",    no_argument,       nullptr, 'L'},
-            {"use-rgb",    no_argument,       nullptr, 'C'},
-            {"cull",    no_argument,       nullptr, 'c'},
+            {"cull",    required_argument,       nullptr, 'c'},
+            {"colorcorr",    required_argument,       nullptr, 'k'},
             {"rgbe",    no_argument,       nullptr, 'R'},
             {"pfs",    no_argument,       nullptr, 'P'},
             {"exact",    no_argument,       nullptr, 'e'},
@@ -198,8 +195,9 @@ void pfshdrraw(int argc, char *argv[]) {
             {nullptr, 0,                         nullptr, 0}
     };
 
+    std::stringstream k;
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevuXCLd:s:r:o:m:x:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevuRd:s:r:o:m:x:k:", cmdLineOptions, &optionIndex)) != -1) {
 
         switch (c) {
             /* help */
@@ -216,23 +214,11 @@ void pfshdrraw(int argc, char *argv[]) {
             case 'e':
                 nominal = false;
                 break;
-            case 'L':
-                yuv = true;
-                lead_channel = 0;
-                break;
             case 'x':
                 oor_high = atof(optarg);
                 break;
             case 'm':
                 oor_low = atof(optarg);
-                break;
-            case 'X':
-                yuv = true;
-                lead_channel = 0;
-                break;
-            case 'C':
-                yuv = false;
-                lead_channel = -1;
                 break;
             case 'o':
                 opt_saturation_offset_perc = atof(optarg);
@@ -243,6 +229,10 @@ void pfshdrraw(int argc, char *argv[]) {
                 opt_black_offset_perc = atof(optarg);
                 if( opt_black_offset_perc < 0 || opt_black_offset_perc > 0.25 )
                     throw pfs::Exception("saturation offset should be between 0 and 0.25");
+                break;
+            case 'k':
+                k << optarg;
+                k >> rgb_corr[0] >> rgb_corr[1] >> rgb_corr[2];
                 break;
             case 's':
                 opt_scale = atof(optarg);
@@ -290,7 +280,6 @@ void pfshdrraw(int argc, char *argv[]) {
     ExposureList imgsG;
     ExposureList imgsB;
 
-    pfs::ColorSpace hdr_target = yuv ? pfs::CS_YUV : pfs::CS_RGB;
     std::stringstream header;
     while (true) {
         pmax = 0;
@@ -314,6 +303,11 @@ void pfshdrraw(int argc, char *argv[]) {
                     if (framefile.at(0) == '#') {
                         std::string comment = iss.str();
                         const uint begin =  comment.find_first_not_of("# \t");
+                        const uint equal = comment.find_first_of('=');
+                        if ( comment.substr(begin, equal - begin) == "RGB_correction"){
+                            istringstream ss(comment.substr(equal+1, comment.size()));
+                            ss >> rgb_corr[0] >> rgb_corr[1] >> rgb_corr[2];
+                        }
                         header << comment.substr(begin, comment.size()) << endl;
                     }
                     continue;
@@ -330,10 +324,7 @@ void pfshdrraw(int argc, char *argv[]) {
                 pfs::Channel *X, *Y, *Z;
                 iframe->createXYZChannels( X, Y, Z );
 
-                //Store sRGB data temporarily in XYZ channels
                 reader.readImage( X, Y, Z );
-//                pfs::multiplyArray()
-                pfs::transformColorSpace(pfs::CS_RGB, X, Y, Z, hdr_target, X, Y, Z);
                 #else
                 throw pfs::Exception("linearhdr compiled without ppm support use pfsin to load files");
                 #endif
@@ -352,7 +343,7 @@ void pfshdrraw(int argc, char *argv[]) {
 
             if (!fromfile){
                 info = frame_info(iframe, opt_scale);
-                pfs::transformColorSpace(pfs::CS_XYZ, X, Y, Z, hdr_target, X, Y, Z);
+                pfs::transformColorSpace(pfs::CS_XYZ, X, Y, Z, pfs::CS_RGB, X, Y, Z);
             }
 
 
@@ -366,28 +357,28 @@ void pfshdrraw(int argc, char *argv[]) {
 
             if (dataonly){
                 fmax = info.factor;
+                float r, g, b;
                 for (int i = 0; i < size; i++) {
+                    r = (*X)(i) * rgb_corr[0];
+                    g = (*Y)(i) * rgb_corr[1];
+                    b = (*Z)(i) * rgb_corr[2];
                     std::cout << (*X)(i) << "\t" << (*Y)(i) << "\t" << (*Z)(i) << "\t";
-                    if (yuv) {
-                        pmax = max((*X)(i), pmax);
-                        float below = (*X)(i) < opt_black_offset_perc;
-                        float above = (*X)(i) > 1 - opt_saturation_offset_perc;
-                        std::cout << (*X)(i) * fmax << "\t" << (*Y)(i) << "\t" << (*Z)(i) << "\t" << (*X)(i) * fmax << "\t" << below << "\t" << above << std::endl;
-                    } else {
-                        pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
-                        float below = min((*X)(i), (*Y)(i), (*Z)(i)) < opt_black_offset_perc;
-                        float above = max((*X)(i), (*Y)(i), (*Z)(i)) > 1 - opt_saturation_offset_perc;
-                        // which are correct? radiance (equal energy primaries) (first)
+
+                    pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
+                    float below = min((*X)(i), (*Y)(i), (*Z)(i)) < opt_black_offset_perc;
+                    float above = max((*X)(i), (*Y)(i), (*Z)(i)) > 1 - opt_saturation_offset_perc;
+                    // which are correct? radiance (equal energy primaries) (first)
 //                        float lum = (0.265074126*(*X)(i) + 0.670114631*(*Y)(i) + 0.064811243*(*Z)(i)) * fmax;
-                        // or sRGB primaries?
-                        float lum = (0.2126*(*X)(i) + 0.7152*(*Y)(i) + 0.0722*(*Z)(i)) * fmax;
-                        std::cout << (*X)(i) * fmax << "\t" << (*Y)(i) * fmax << "\t" << (*Z)(i) * fmax << "\t" << lum << "\t" << below << "\t" << above << std::endl;
-                    }
+                    // or sRGB primaries?
+                    float lum = (0.212656*r + 0.715158*g + 0.072186*b) * fmax;
+                    std::cout << r * fmax << "\t" << g * fmax << "\t" << b * fmax << "\t" << lum << "\t" << below << "\t" << above << std::endl;
                 }
                 std::cout  << std::endl;
             } else {
                 Exposure eR, eG, eB;
-                eR.iso = eG.iso = eB.iso = info.iso;
+                eR.iso = info.iso / rgb_corr[0];
+                eG.iso = info.iso / rgb_corr[1];
+                eB.iso = info.iso / rgb_corr[2];
                 eR.aperture = eG.aperture = eB.aperture = info.aperture;
                 eR.exposure_time = eG.exposure_time = eB.exposure_time = info.etime;
                 eR.yi = new pfs::Array2DImpl(width, height);
@@ -402,10 +393,7 @@ void pfshdrraw(int argc, char *argv[]) {
                     (*eR.yi)(i) = (*X)(i);
                     (*eG.yi)(i) = (*Y)(i);
                     (*eB.yi)(i) = (*Z)(i);
-                    if (yuv)
-                        pmax = max((*X)(i), pmax);
-                    else
-                        pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
+                    pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
                 }
 
                 // add to exposures list
@@ -456,7 +444,7 @@ void pfshdrraw(int argc, char *argv[]) {
 
     VERBOSE_STR << "applying response..." << endl;
     sp = linear_Response(RGB_out, exposures, opt_saturation_offset_perc, opt_black_offset_perc,
-                         opt_deghosting, opt_scale, lead_channel, oor_high, oor_low);
+                         opt_deghosting, opt_scale, oor_high, oor_low);
 
     if (sp > 0) {
         float perc = ceilf(100.0f * sp / size);
@@ -464,11 +452,10 @@ void pfshdrraw(int argc, char *argv[]) {
     }
     if (rgbe){
         RGBEWriter writer( stdout, true );
-        pfs::transformColorSpace( hdr_target, Xj, Yj, Zj, pfs::CS_RGB, Xj, Yj, Zj );
         std::string hstring = header.str().substr(0,-1);
         writer.writeImage( Xj, Yj, Zj, hstring );
     } else {
-        pfs::transformColorSpace(hdr_target, Xj, Yj, Zj, pfs::CS_XYZ, Xj, Yj, Zj);
+        pfs::transformColorSpace(pfs::CS_RGB, Xj, Yj, Zj, pfs::CS_XYZ, Xj, Yj, Zj);
         pfsio.writeFrame(frame, stdout);
     }
 
