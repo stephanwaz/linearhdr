@@ -135,7 +135,6 @@ void printHelp() {
                     "\t[--oor-high, -x <val>]: value to use for out of range high, default from data\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
                     "\t\tuse linearhdr_calibrate to calculate\n"
-                    "\t[--colorcorr, -k]: color correction coefficients\n"
                     "\t[--cull, -c]: throw away extra exposures that are not needed to keep output in range\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
                     "\t[--pfs, -P]: output pfs stream\n"
@@ -171,7 +170,10 @@ void pfshdrraw(int argc, char *argv[]) {
     bool nominal = false;
     float oor_high = 1e-30;
     float oor_low = 1e30;
-    float rgb_corr[3] = {1.0, 1.0, 1.0};
+    float rgb_corr[3][3] = {{1.0, 0.0, 0.0},
+                            {0.0, 1.0, 0.0},
+                            {0.0, 0.0, 1.0}};
+    float vlambda[3] = {0.212656, 0.715158, 0.072186};
 
     /* helper */
     int c;
@@ -180,7 +182,6 @@ void pfshdrraw(int argc, char *argv[]) {
             {"help",       no_argument,       nullptr, 'h'},
             {"verbose",    no_argument,       nullptr, 'v'},
             {"cull",    required_argument,       nullptr, 'c'},
-            {"colorcorr",    required_argument,       nullptr, 'k'},
             {"rgbe",    no_argument,       nullptr, 'R'},
             {"pfs",    no_argument,       nullptr, 'P'},
             {"exact",    no_argument,       nullptr, 'e'},
@@ -197,7 +198,7 @@ void pfshdrraw(int argc, char *argv[]) {
 
     std::stringstream k;
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevuRd:s:r:o:m:x:k:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevuRd:s:r:o:m:x:", cmdLineOptions, &optionIndex)) != -1) {
 
         switch (c) {
             /* help */
@@ -229,10 +230,6 @@ void pfshdrraw(int argc, char *argv[]) {
                 opt_black_offset_perc = atof(optarg);
                 if( opt_black_offset_perc < 0 || opt_black_offset_perc > 0.25 )
                     throw pfs::Exception("saturation offset should be between 0 and 0.25");
-                break;
-            case 'k':
-                k << optarg;
-                k >> rgb_corr[0] >> rgb_corr[1] >> rgb_corr[2];
                 break;
             case 's':
                 opt_scale = atof(optarg);
@@ -304,9 +301,15 @@ void pfshdrraw(int argc, char *argv[]) {
                         std::string comment = iss.str();
                         const uint begin =  comment.find_first_not_of("# \t");
                         const uint equal = comment.find_first_of('=');
-                        if ( comment.substr(begin, equal - begin) == "RGB_correction"){
+                        if ( comment.substr(begin, equal - begin) == "Camera2RGB"){
                             istringstream ss(comment.substr(equal+1, comment.size()));
-                            ss >> rgb_corr[0] >> rgb_corr[1] >> rgb_corr[2];
+                            ss >> rgb_corr[0][0] >> rgb_corr[0][1] >> rgb_corr[0][2];
+                            ss >> rgb_corr[1][0] >> rgb_corr[1][1] >> rgb_corr[1][2];
+                            ss >> rgb_corr[2][0] >> rgb_corr[2][1] >> rgb_corr[2][2];
+                        }
+                        if ( comment.substr(begin, equal - begin) == "LuminanceRGB"){
+                            istringstream ss(comment.substr(equal+1, comment.size()));
+                            ss >> vlambda[0] >> vlambda[1] >> vlambda[2];
                         }
                         header << comment.substr(begin, comment.size()) << endl;
                     }
@@ -359,26 +362,23 @@ void pfshdrraw(int argc, char *argv[]) {
                 fmax = info.factor;
                 float r, g, b;
                 for (int i = 0; i < size; i++) {
-                    r = (*X)(i) * rgb_corr[0];
-                    g = (*Y)(i) * rgb_corr[1];
-                    b = (*Z)(i) * rgb_corr[2];
+                    r = (*X)(i) * rgb_corr[0][0] + (*Y)(i) * rgb_corr[0][1] + (*Z)(i) * rgb_corr[0][2];
+                    g = (*X)(i) * rgb_corr[1][0] + (*Y)(i) * rgb_corr[1][1] + (*Z)(i) * rgb_corr[1][2];
+                    b = (*X)(i) * rgb_corr[2][0] + (*Y)(i) * rgb_corr[2][1] + (*Z)(i) * rgb_corr[2][2];
                     std::cout << (*X)(i) << "\t" << (*Y)(i) << "\t" << (*Z)(i) << "\t";
 
                     pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
                     float below = min((*X)(i), (*Y)(i), (*Z)(i)) < opt_black_offset_perc;
                     float above = max((*X)(i), (*Y)(i), (*Z)(i)) > 1 - opt_saturation_offset_perc;
-                    // which are correct? radiance (equal energy primaries) (first)
-//                        float lum = (0.265074126*(*X)(i) + 0.670114631*(*Y)(i) + 0.064811243*(*Z)(i)) * fmax;
-                    // or sRGB primaries?
-                    float lum = (0.212656*r + 0.715158*g + 0.072186*b) * fmax;
+                    float lum = (vlambda[0]*r + vlambda[1]*g + vlambda[2]*b) * fmax;
                     std::cout << r * fmax << "\t" << g * fmax << "\t" << b * fmax << "\t" << lum << "\t" << below << "\t" << above << std::endl;
                 }
                 std::cout  << std::endl;
             } else {
                 Exposure eR, eG, eB;
-                eR.iso = info.iso / rgb_corr[0];
-                eG.iso = info.iso / rgb_corr[1];
-                eB.iso = info.iso / rgb_corr[2];
+                eR.iso = info.iso;
+                eG.iso = info.iso;
+                eB.iso = info.iso;
                 eR.aperture = eG.aperture = eB.aperture = info.aperture;
                 eR.exposure_time = eG.exposure_time = eB.exposure_time = info.etime;
                 eR.yi = new pfs::Array2DImpl(width, height);
@@ -444,7 +444,7 @@ void pfshdrraw(int argc, char *argv[]) {
 
     VERBOSE_STR << "applying response..." << endl;
     sp = linear_Response(RGB_out, exposures, opt_saturation_offset_perc, opt_black_offset_perc,
-                         opt_deghosting, opt_scale, oor_high, oor_low);
+                         opt_deghosting, opt_scale, rgb_corr, oor_high, oor_low);
 
     if (sp > 0) {
         float perc = ceilf(100.0f * sp / size);

@@ -21,6 +21,22 @@ def camera_raw_values(img):
     return imar
 
 
+def get_xyz_cam(img):
+    rawinfo = Popen(shlex.split(f"raw-identify -v {img}"),
+                    stdout=PIPE).communicate()[0].decode(sys.stdin.encoding)
+    a = rawinfo.rsplit("XYZ->CamRGB matrix:", 1)[1].strip().split()[0:9]
+    xyz_rgb = np.array([float(i) for i in a]).reshape(3,3)
+    return xyz_rgb
+
+def get_cam_rgb(img):
+    rawinfo = Popen(shlex.split(f"raw-identify -v {img}"),
+                    stdout=PIPE).communicate()[0].decode(sys.stdin.encoding)
+    a = re.search(r"Derived D65 multipliers: .*", rawinfo)
+    rgb = " ".join(a.group(0).strip().rsplit(None, 3)[-3:])
+    return rgb
+
+
+
 def info_from_exif(img, correct, times=True, fo=None):
     if fo is None:
         anom = []
@@ -131,24 +147,68 @@ def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None,
             cs = "-B {} {} {} {}".format(*crop)
         if bad_pixels is not None:
             cs += f" -P {bad_pixels}"
-        Popen(shlex.split(f"dcraw_emu -c 0 -4 -o 1 {cs} -Z {ppm} -k {black} -r 2 1 2 1 -S {white} {img}")).communicate()
+        Popen(shlex.split(f"dcraw_emu -c 0 -4 -o 0 {cs} -Z {ppm} -k {black} -r 2 1 2 1 -S {white} {img}")).communicate()
     rawinfo = info_from_exif(img, correct, fo=fo)
     return ppm, *rawinfo
 
 
+def process_colorspace_option(colorspace):
+    cso = colorspace
+    try:
+        colorspace = [float(i) for i in colorspace.split()]
+    except ValueError:
+        if colorspace in ['rad', 'srgb']:
+            return colorspace
+    else:
+        if len(colorspace) == 8:
+            return colorspace[0:6], colorspace[6:]
+    raise ValueError(f"bad value for colorspace: {cso}")
+
+def pw_mtx(p, w):
+    p = np.asarray(p).reshape(3, 2)
+    wxyz = np.array([w[0], w[1], (1 - np.sum(w))])/w[1]
+    z = (1 - np.sum(p, axis=1))[:, None]
+    pxyz = np.hstack((p, z)).T
+    c = np.einsum('ij,j->i', np.linalg.inv(pxyz), wxyz)
+    return np.einsum('ij,j->ij', pxyz, c)
+
+
+def cam_color_mtx(img, cs='rad'):
+    # xyz->camRGB from adobeDNG/libraw/dcraw
+    xyz_cam = get_xyz_cam(img)
+    if cs == 'rad':
+        cs = ((0.640, 0.330, 0.290, 0.600, 0.150, 0.060), (0.3333, 0.3333))
+    elif cs == 'srgb':
+        cs = ((0.64,  0.33,  0.3,  0.6,  0.15,  0.06), (0.3127, 0.329))
+    rgb_xyz = pw_mtx(*cs)
+
+    # rgb->camRGB
+    rgb_cam = xyz_cam @ rgb_xyz
+    # normalize
+    n_cam_rgb = rgb_cam / np.sum(rgb_cam, axis=1, keepdims=True)
+    # invert to camRGB->rgb
+    cam_rgb = np.linalg.inv(n_cam_rgb)
+    cam_rgbs = " ".join([f"{i:.05f}" for i in cam_rgb.ravel()])
+    ps = " ".join([f"{i:.05f}" for i in cs[0]])
+    ws = " ".join([f"{i:.05f}" for i in cs[1]])
+    ls = " ".join([f"{i:.05f}" for i in rgb_xyz[1]])
+    header = [f"# Camera2RGB= {cam_rgbs}",
+              f"# TargetPrimaries= {ps}",
+              f"# TargetWhitePoint= {ws}",
+              f"# LuminanceRGB= {ls}"]
+    return cam_rgb, header
+
 def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLevel",
-                    white="LinearityUpperMargin", wp=None, fo=None, scale=1.0, saturation=0.01, r=0.01):
-    if wp is None:
-        wp = process_dcraw_opt("WB_RGGBLevelsAsShot", img)
-    wp = [int(i) for i in wp.split()]
-    wp = " ".join([str(i/wp[1]) for i in wp])
+                    white="LinearityUpperMargin", colorspace='rad', fo=None, scale=1.0, saturation=0.01, r=0.01):
+    cam_rgb, header = cam_color_mtx(img, colorspace)
     ppm = img + "_calibrate.ppm"
 
     ppm, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white, ppm=ppm, fo=fo)
     iso = iso/scale
     txt = img + "_calibrate.txt"
     f = open(txt, 'w')
-    print(f"# RGB_correction= {wp}", file=f)
+    for h in header:
+        print(h, file=f)
     print(f"{ppm} {iso} {ap:.03f} {1/sh:.08f}", file=f)
     f.close()
     opts += f" -o {saturation} -r {r}"
@@ -181,15 +241,17 @@ def report(ppms, s=False, l=False, scale=1, sat_w=0.99, sat_b=.01, outf=None):
             print(f"{ppm} {iso/scale} {ap:.03f} {1/sh:.08f}", file=outf)
 
 
-def report_calibrate(ppms):
+def report_calibrate(ppms, sort='shutter'):
     avg = 0
     div = 0
     minv = 1e9
     maxv = 0
-
+    sorti = dict(image=0, shutter=1, aperture=2)
+    si = sorti[sort]
     print("image\tiso\taperture\texposure_time\tsat_red\tsat_green\tsat_blue\tred\tgreen\tblue\tlum(assumes_D65)\tfrac_above\tfrac_below\tfrac_oor")
 
-    for ppm, sh, ap, iso, rgb in sorted(ppms, key=lambda x: x[1]):
+    ppms = sorted(ppms, key=lambda x: x[1])
+    for ppm, sh, ap, iso, rgb in sorted(ppms, key=lambda x: x[si]):
         print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04f}" for i in rgb]))
         if rgb[-2] == 0 and rgb[-1] == 0:
             minv = min(minv, rgb[-4])

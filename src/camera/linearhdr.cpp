@@ -77,6 +77,7 @@ int linear_Response(pfs::Array2D *out[],
                    const float opt_black_offset,
                    float deghosting_value,
                    const float scale,
+                   const float rgb_corr[3][3],
                    const float oor_high = 1e-30,
                    const float oor_low = 1e30){
 
@@ -116,10 +117,9 @@ int linear_Response(pfs::Array2D *out[],
         // First compute scene radiances
         for (int i = 0; i < N; i++) {
             for (int cc = 0; cc < 3; cc++) {
-                w[cc][i] = 0;
                 const Exposure &expo = (*imgs[cc])[i];
                 X[cc][i] = (*expo.yi)(j) * get_exposure_compensationX(expo) * scale;
-                w[cc][i] += get_weight((*expo.yi)(j));
+                w[cc][i] = get_weight((*expo.yi)(j));
                 saturated_exp[i] = (*expo.yi)(j) >= 1 - opt_saturation_offset || saturated_exp[i];
                 under_exp[i] = (*expo.yi)(j) <= opt_black_offset || under_exp[i];
             }
@@ -195,13 +195,21 @@ int linear_Response(pfs::Array2D *out[],
 
     }
     // Fill in nan values NOTE: removed normalization here
-    for (int j = 0; j < width * height; j++)
+    float x,y,z;
+    for (int j = 0; j < width * height; j++) {
         for (int cc = 0; cc < 3; cc++) {
             if ((*out[cc])(j) == -1)
                 (*out[cc])(j) = mmax[cc];
             else if ((*out[cc])(j) == -2)
                 (*out[cc])(j) = mmin[cc];
         }
+        x = (*out[0])(j);
+        y = (*out[1])(j);
+        z = (*out[2])(j);
+        (*out[0])(j) = x * rgb_corr[0][0] + y * rgb_corr[0][1] + z * rgb_corr[0][2];
+        (*out[1])(j) = x * rgb_corr[1][0] + y * rgb_corr[1][1] + z * rgb_corr[1][2];
+        (*out[2])(j) = x * rgb_corr[2][0] + y * rgb_corr[2][1] + z * rgb_corr[2][2];
+    }
 
     VERBOSE_STR << "Maximum Value: " << mmax[0] << ", " << mmax[1] << ", " << mmax[2] << std::endl;
     VERBOSE_STR << "Exposure pixels skipped due to deghosting: " <<

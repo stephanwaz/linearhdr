@@ -65,10 +65,12 @@ shared_run_opts = [
                 help="dcraw_emu saturation level. either a number or exiftool key, it is critical this is kept "
                      " consistent between calibration and make_list/run. Possible options: NormalWhiteLevel, "
                      "SpecularWhiteLevel, LinearityUpperMargin, 10000"),
-    click.option("-wp",
-                 help="If not given uses as shot (exiftool -WB_RGGBLevelsAsShot, reordered to RGB. "
-                      "Make sure to add multiple G channels. This should correspond to D65 for"
-                      " standard luminance efficacy / XYZ conversion. For example: 2351 1024 1024 1533 becomes 2351 2048 1533"),
+    click.option("-colorspace", default='rad',
+                 help="by default outputs radiance RGB (defined by primaries/whitepoint:"
+                      " ((0.640, 0.330, 0.290, 0.600, 0.150, 0.060), (0.3333, 0.3333)). other options are:"
+                      "srgb: ((0.64,  0.33,  0.3,  0.6,  0.15,  0.06), (0.3127, 0.329) or a list of 8 values "
+                      "(primaries + wp) the cam2rgb matrix and output primaries are written into the make_list header and "
+                      " added to the output hdr header by linearhdr"),
     click.option("-fo", "-f-overrides", callback=clk.tup_float,
                  help="if given, sets --correct to True. pairs of nominal/exact aperture values to correct. any aperture"
                       " not given will use the standard correction. for example give 11,11.4 22,23 to override standard"
@@ -84,19 +86,21 @@ shared_run_opts = [
 @click.argument("imgs", callback=clk.are_files)
 @click.argument("crop", callback=clk.split_int)
 @click.option("-hdropts", default="", help="options to pass to linearhdr (put in qoutes)")
+@click.option("-sort", default="shutter", help="cane be image, aperture, shutter")
 @clk.shared_decs(shared_run_opts)
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.01, range=0.01, hdropts="",
               black="AverageBlackLevel", white="AverageBlackLevel",
-              wp=None, fo=None, **kwargs):
+              colorspace='rad', fo=None, sort='shutter', **kwargs):
     """calibration routine, see README.rst
 
     imgs: list of images
     crop: help="<left> <upper> <width> <height>"
     """
+    colorspace = pl.process_colorspace_option(colorspace)
     ppms = pool_call(pl.calibrate_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black,
-                     white=white, wp=wp, fo=fo, scale=scale * 10**nd, saturation=saturation, r=range)
-    pl.report_calibrate(ppms)
+                     white=white, colorspace=colorspace, fo=fo, scale=scale * 10**nd, saturation=saturation, r=range)
+    pl.report_calibrate(ppms, sort=sort)
 
 
 make_list_opts = [
@@ -122,7 +126,7 @@ make_list_opts = [
 
 def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
                  crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False,
-                 black="AverageBlackLevel", white="AverageBlackLevel", wp=None, **kwargs):
+                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', **kwargs):
     """make list routine, use to generate input to linearhdr"""
     outf = sys.stdout
     if listonly:
@@ -135,14 +139,9 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
             hdropts += " --nominal"
     ppms = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo,
                      listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False)
-    if wp is None:
-        print(pl.header_info(imgs[0]), file=outf)
-        wp = pl.process_dcraw_opt("WB_RGGBLevelsAsShot", imgs[0])
-    else:
-        print(pl.header_info(imgs[0], ("ColorSpace",)), file=outf)
-    wp = [int(i) for i in wp.split()]
-    wp = " ".join([str(i/wp[1]) for i in wp])
-    print(f"# RGB_correction= {wp}", file=outf)
+    cam_rgb, header = pl.cam_color_mtx(imgs[0], colorspace)
+    for h in header:
+        print(h, file=outf)
     pl.report(ppms, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
     if callhdr:
         outf.close()
@@ -168,7 +167,6 @@ def makelist(ctx, imgs, **kwargs):
 def run(ctx, imgs, **kwargs):
     """make list routine, use to generate input to linearhdr"""
     makelist_run(ctx, imgs, callhdr=True, **kwargs)
-
 
 
 @main.command()
