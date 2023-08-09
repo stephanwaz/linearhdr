@@ -7,7 +7,7 @@ from subprocess import Popen
 import numpy as np
 from clasp import click
 import clasp.click_ext as clk
-from clasp.script_tools import try_mkdir, clean_tmp, pipeline
+from clasp.script_tools import try_mkdir, clean_tmp, pipeline, sglob
 
 import pylinearhdr
 import raytools
@@ -16,9 +16,33 @@ from raytools.utility import pool_call
 from pylinearhdr import shadowband as sb
 from pylinearhdr import pylinearhdr as pl
 
-@click.group()
+
+def get_profiles():
+    d = os.path.dirname(pylinearhdr.__file__)
+    try_mkdir(f"{d}/pylinearhdr_profiles")
+    profiles = sglob(f"{d}/pylinearhdr_profiles/*.cfg")
+    pnames = [os.path.basename(p)[:-4] for p in profiles]
+    return pnames
+
+
+def get_profile(profile, forceexist=True):
+    d = os.path.dirname(pylinearhdr.__file__)
+    f = f"{d}/pylinearhdr_profiles/{profile}.cfg"
+    if os.path.isfile(f) or not forceexist:
+        return f
+    else:
+        raise ValueError(f"{profile} profile not found. choose from {global_profiles} or use -saveprofile")
+
+
+global_profiles = get_profiles()
+
+
+@click.group(invoke_without_command=True)
 @click.option('-config', '-c', type=click.Path(exists=True),
-              help="path of config file to load")
+              help="path of config file to load, if given, ignores profile")
+@click.option('-profile', help=f"name of saved profile to load, options: {global_profiles}")
+@click.option('-save',
+              help="name of profile to save -config to.")
 @click.option('-n', default=None, type=int,
               help='sets the environment variable RAYTOOLS_PROC_CAP set to'
                    ' 0 to clear (parallel processes will use cpu_limit)')
@@ -28,15 +52,32 @@ from pylinearhdr import pylinearhdr as pl
               help="show traceback on exceptions")
 @click.version_option(version=pylinearhdr.__version__)
 @click.pass_context
-def main(ctx, config=None, n=None,  **kwargs):
+def main(ctx, config=None, profile=None, save=None, n=None,  **kwargs):
     """the pylinearhdr executable is a command line interface to utility commands
-    as part of the linearhdr package, some scripts available without any dependencies via cmake install.
+    as part of the linearhdr package, some scripts available without any dependencies via cmake install. Run without
+    a subcommand to check/set config and profiles.
     """
-    os.environ['CLASP_PIPE'] = '1'
-    raytools.io.set_nproc(n)
-    ctx.info_name = 'pylinearhdr'
-    ctx.obj = dict(temps=[])
-    clk.get_config(ctx, config, None, None, None)
+    if save is not None:
+        if config is None:
+            raise ValueError("-save requires -config")
+        if save in global_profiles:
+            if not click.confirm("Overwrite existing profile?"):
+                while save in global_profiles:
+                    save = click.prompt("Please enter a new name for profile:")
+        nprofile = get_profile(save, False)
+        shutil.copy(config, nprofile)
+    if config is None and profile is not None:
+        if profile in global_profiles:
+            config = get_profile(profile)
+    if ctx.invoked_subcommand is not None:
+        os.environ['CLASP_PIPE'] = '1'
+        raytools.io.set_nproc(n)
+        ctx.info_name = 'pylinearhdr'
+        ctx.obj = dict(temps=[])
+        clk.get_config(ctx, config, None, None, None)
+    else:
+        print(f"config file loaded from: {config}", file=sys.stderr)
+        print(open(config).read())
 
 
 def is_file_or_tup_int(ctx, param, s):
@@ -68,14 +109,17 @@ shared_run_opts = [
     click.option("-colorspace", default='rad',
                  help="by default outputs radiance RGB (defined by primaries/whitepoint:"
                       " ((0.640, 0.330, 0.290, 0.600, 0.150, 0.060), (0.3333, 0.3333)). other options are:"
-                      "srgb: ((0.64,  0.33,  0.3,  0.6,  0.15,  0.06), (0.3127, 0.329) or a list of 8 values "
+                      " raw: do not convert colors from cam_raw"
+                      " srgb: ((0.64,  0.33,  0.3,  0.6,  0.15,  0.06), (0.3127, 0.329) or a list of 8 values "
                       "(primaries + wp) the cam2rgb matrix and output primaries are written into the make_list header and "
                       " added to the output hdr header by linearhdr"),
+    click.option("-xyzcam", callback=clk.split_float, help="custom xyz->cam matrix, if not given uses raw-identify"),
     click.option("-fo", "-f-overrides", callback=clk.tup_float,
                  help="if given, sets --correct to True. pairs of nominal/exact aperture values to correct. any aperture"
                       " not given will use the standard correction. for example give 11,11.4 22,23 to override standard"
                       " corrections for F11 and F22 (would be 11.31 and 22.63)"),
     click.option("-scale", default=1.0, help="calibration scale factor (applies to ISO, so do not use -s with linearhdr)"),
+    click.option("-cscale", callback=clk.split_float, help="color calibration scale factor (applies via header, same as linearhdr -k)"),
     click.option("-nd", default=0.0, help="additional ND filter (applies to ISO, so do not use -s with linearhdr)"),
     click.option("-saturation", "-saturation-offset", "-s", default=0.01, help="saturation offset, if white is not LinearityUpperMargin, this must be changed"),
     click.option("-range", "-r", default=0.01, help="lower range of single raw exposure"),
@@ -87,11 +131,13 @@ shared_run_opts = [
 @click.argument("crop", callback=clk.split_int)
 @click.option("-hdropts", default="", help="options to pass to linearhdr (put in qoutes)")
 @click.option("-sort", default="shutter", help="cane be image, aperture, shutter")
+@click.option("-target", type=float, help="reference value")
+@click.option("--header/--no-header", default=True, help="print column labels")
 @clk.shared_decs(shared_run_opts)
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.01, range=0.01, hdropts="",
-              black="AverageBlackLevel", white="AverageBlackLevel",
-              colorspace='rad', fo=None, sort='shutter', **kwargs):
+              black="AverageBlackLevel", white="AverageBlackLevel", cscale=None,
+              colorspace='rad', fo=None, sort='shutter', target=None, header=True, xyzcam=None, **kwargs):
     """calibration routine, see README.rst
 
     imgs: list of images
@@ -99,8 +145,8 @@ def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.0
     """
     colorspace = pl.process_colorspace_option(colorspace)
     ppms = pool_call(pl.calibrate_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black,
-                     white=white, colorspace=colorspace, fo=fo, scale=scale * 10**nd, saturation=saturation, r=range)
-    pl.report_calibrate(ppms, sort=sort)
+                     white=white, colorspace=colorspace, fo=fo, scale=scale * 10**nd, cscale=cscale, saturation=saturation, r=range, xyzcam=xyzcam)
+    pl.report_calibrate(ppms, sort=sort, target=target, header=header)
 
 
 make_list_opts = [
@@ -125,8 +171,8 @@ make_list_opts = [
 
 
 def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
-                 crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False,
-                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', **kwargs):
+                 crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None,
+                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, **kwargs):
     """make list routine, use to generate input to linearhdr"""
     outf = sys.stdout
     if listonly:
@@ -139,7 +185,12 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
             hdropts += " --nominal"
     ppms = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo,
                      listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False)
-    cam_rgb, header = pl.cam_color_mtx(imgs[0], colorspace)
+    if xyzcam is None:
+        normalize = True
+        xyzcam = pl.get_xyz_cam(imgs[0])
+    else:
+        normalize = False
+    cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale, normalize=normalize)
     for h in header:
         print(h, file=outf)
     pl.report(ppms, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
@@ -149,6 +200,9 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         if fisheye:
             command += ["pcomb -f fisheye_corr.cal -o - ", "getinfo -a 'VIEW= -vta -vh 180 -vv 180'"]
         pipeline(command, outfile=sys.stdout)
+        if clean:
+            for ppm in ppms:
+                os.remove(ppm[0])
         clk.tmp_clean(ctx)
 
 
@@ -163,6 +217,7 @@ def makelist(ctx, imgs, **kwargs):
 
 @main.command()
 @clk.shared_decs(make_list_opts + shared_run_opts)
+@click.option("--clean/--no-clean", default=True, help="delete ppm files after linearhdr")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def run(ctx, imgs, **kwargs):
     """make list routine, use to generate input to linearhdr"""
@@ -289,8 +344,9 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, **
 @main.command()
 @click.argument("imgs", callback=clk.are_files)
 @click.option("-out", help="base name, becomes: img_XXX, if None, appends info to current name")
+@click.option("--copy/--move", default=True, help="copy or move")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def rename(ctx, imgs, out=None, **kwargs):
+def rename(ctx, imgs, out=None, copy=True, **kwargs):
     """rename raw files based on ISO_APERTURE_SHUTTER_CCT"""
     infos = pool_call(pl.name_by_exif, imgs, expandarg=False, prefix=out)
     copied = []
@@ -301,7 +357,10 @@ def rename(ctx, imgs, out=None, **kwargs):
             dest2 = dest2.rsplit(".", 1)
             dest2 = "{}_{:02d}.{}".format(dest2[0], i, dest2[1])
             i += 1
-        shutil.copy(orig, dest2)
+        if copy:
+            shutil.copy(orig, dest2)
+        else:
+            shutil.move(orig, dest2)
         copied.append(dest2)
     ctx.obj['imgs'] = copied
 

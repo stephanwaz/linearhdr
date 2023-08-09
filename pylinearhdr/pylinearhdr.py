@@ -28,6 +28,7 @@ def get_xyz_cam(img):
     xyz_rgb = np.array([float(i) for i in a]).reshape(3,3)
     return xyz_rgb
 
+
 def get_cam_rgb(img):
     rawinfo = Popen(shlex.split(f"raw-identify -v {img}"),
                     stdout=PIPE).communicate()[0].decode(sys.stdin.encoding)
@@ -164,7 +165,9 @@ def process_colorspace_option(colorspace):
             return colorspace[0:6], colorspace[6:]
     raise ValueError(f"bad value for colorspace: {cso}")
 
+
 def pw_mtx(p, w):
+    """calculate rgb->xyz matrix from primaries and whitepoint"""
     p = np.asarray(p).reshape(3, 2)
     wxyz = np.array([w[0], w[1], (1 - np.sum(w))])/w[1]
     z = (1 - np.sum(p, axis=1))[:, None]
@@ -173,34 +176,49 @@ def pw_mtx(p, w):
     return np.einsum('ij,j->ij', pxyz, c)
 
 
-def cam_color_mtx(img, cs='rad'):
+def cam_color_mtx(xyzcam, cs='rad', cscale=None, normalize=True):
+    """calculate camRGB->RGB from camera xyz->cam (from raw-identify or custom) and rgb primaries/whitepoint """
     # xyz->camRGB from adobeDNG/libraw/dcraw
-    xyz_cam = get_xyz_cam(img)
+    if cs == 'raw':
+        return np.eye(3), [f"# Camera2RGB= 1 0 0 0 1 0 0 0 1"]
     if cs == 'rad':
         cs = ((0.640, 0.330, 0.290, 0.600, 0.150, 0.060), (0.3333, 0.3333))
     elif cs == 'srgb':
         cs = ((0.64,  0.33,  0.3,  0.6,  0.15,  0.06), (0.3127, 0.329))
+    else:
+        cs = (np.asarray(cs[0]).ravel(), np.asarray(cs[1]).ravel())
     rgb_xyz = pw_mtx(*cs)
 
     # rgb->camRGB
-    rgb_cam = xyz_cam @ rgb_xyz
+    rgb_cam = np.asarray(xyzcam).reshape(3, 3) @ rgb_xyz
     # normalize
-    n_cam_rgb = rgb_cam / np.sum(rgb_cam, axis=1, keepdims=True)
+    if normalize:
+        rgb_cam = rgb_cam / np.sum(rgb_cam, axis=1, keepdims=True)
     # invert to camRGB->rgb
-    cam_rgb = np.linalg.inv(n_cam_rgb)
-    cam_rgbs = " ".join([f"{i:.05f}" for i in cam_rgb.ravel()])
-    ps = " ".join([f"{i:.05f}" for i in cs[0]])
-    ws = " ".join([f"{i:.05f}" for i in cs[1]])
-    ls = " ".join([f"{i:.05f}" for i in rgb_xyz[1]])
+    cam_rgb = np.linalg.inv(rgb_cam)
+    cam_rgbs = " ".join([f"{i:.08f}" for i in cam_rgb.ravel()])
+
+    ps = " ".join([f"{i:.04f}" for i in cs[0]])
+    ws = " ".join([f"{i:.04f}" for i in cs[1]])
+    ls = " ".join([f"{i:.08f}" for i in rgb_xyz[1]])
     header = [f"# Camera2RGB= {cam_rgbs}",
               f"# TargetPrimaries= {ps}",
               f"# TargetWhitePoint= {ws}",
               f"# LuminanceRGB= {ls}"]
+    if cscale is not None:
+        ccal = " ".join([str(i) for i in cscale])
+        header.append(f"# RGBcalibration= {ccal}")
     return cam_rgb, header
 
-def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLevel",
+
+def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLevel", xyzcam=None, cscale=None,
                     white="LinearityUpperMargin", colorspace='rad', fo=None, scale=1.0, saturation=0.01, r=0.01):
-    cam_rgb, header = cam_color_mtx(img, colorspace)
+    if xyzcam is None:
+        normalize = True
+        xyzcam = get_xyz_cam(img)
+    else:
+        normalize = False
+    cam_rgb, header = cam_color_mtx(xyzcam, colorspace, cscale=cscale, normalize=normalize)
     ppm = img + "_calibrate.ppm"
 
     ppm, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white, ppm=ppm, fo=fo)
@@ -241,18 +259,24 @@ def report(ppms, s=False, l=False, scale=1, sat_w=0.99, sat_b=.01, outf=None):
             print(f"{ppm} {iso/scale} {ap:.03f} {1/sh:.08f}", file=outf)
 
 
-def report_calibrate(ppms, sort='shutter'):
+def report_calibrate(ppms, sort='shutter', target=None, header=True):
     avg = 0
     div = 0
     minv = 1e9
     maxv = 0
     sorti = dict(image=0, shutter=1, aperture=2)
     si = sorti[sort]
-    print("image\tiso\taperture\texposure_time\tsat_red\tsat_green\tsat_blue\tred\tgreen\tblue\tlum(assumes_D65)\tfrac_above\tfrac_below\tfrac_oor")
-
+    if header:
+        if target:
+            print(f"image\tiso\taperture\texposure_time\tsat_red\tsat_green\tsat_blue\tred\tgreen\tblue\tlum\tfrac_above\tfrac_below\tfrac_oor\ttarget:{target}")
+        else:
+            print("image\tiso\taperture\texposure_time\tsat_red\tsat_green\tsat_blue\tred\tgreen\tblue\tlum\tfrac_above\tfrac_below\tfrac_oor")
     ppms = sorted(ppms, key=lambda x: x[1])
     for ppm, sh, ap, iso, rgb in sorted(ppms, key=lambda x: x[si]):
-        print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04f}" for i in rgb]))
+        if target:
+            print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04f}" for i in rgb]) + f"\t{rgb[6]/target:.04f}")
+        else:
+            print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04f}" for i in rgb]))
         if rgb[-2] == 0 and rgb[-1] == 0:
             minv = min(minv, rgb[-4])
             maxv = max(maxv, rgb[-4])

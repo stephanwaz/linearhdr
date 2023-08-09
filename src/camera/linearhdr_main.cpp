@@ -133,6 +133,8 @@ void printHelp() {
                     "\n\t\tdo not use with large files!\n"
                     "\t[--oor-low, -m <val>]: value to use for out of range low, default from data\n"
                     "\t[--oor-high, -x <val>]: value to use for out of range high, default from data\n"
+                    "\t[--rgbs, -k '<val> <val> <val>']: rgb channel calibration default=1.0 1.0 1.0\n"
+                    "\t\toverriden by RGBcalibration in header line\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
                     "\t\tuse linearhdr_calibrate to calculate\n"
                     "\t[--cull, -c]: throw away extra exposures that are not needed to keep output in range\n"
@@ -174,6 +176,7 @@ void pfshdrraw(int argc, char *argv[]) {
                             {0.0, 1.0, 0.0},
                             {0.0, 0.0, 1.0}};
     float vlambda[3] = {0.212656, 0.715158, 0.072186};
+    float rgbcal[3] = {1.0, 1.0, 1.0};
 
     /* helper */
     int c;
@@ -191,6 +194,7 @@ void pfshdrraw(int argc, char *argv[]) {
             { "saturation-offset", required_argument, nullptr, 'o' },
             { "range", required_argument, nullptr, 'r' },
             { "scale", required_argument, nullptr, 's' },
+            { "rgbs", required_argument, nullptr, 'k' },
             { "oor-low", required_argument, nullptr, 'm' },
             { "oor-high", required_argument, nullptr, 'x' },
             {nullptr, 0,                         nullptr, 0}
@@ -198,7 +202,7 @@ void pfshdrraw(int argc, char *argv[]) {
 
     std::stringstream k;
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevuRd:s:r:o:m:x:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevuRd:s:r:o:m:x:k:", cmdLineOptions, &optionIndex)) != -1) {
 
         switch (c) {
             /* help */
@@ -235,6 +239,10 @@ void pfshdrraw(int argc, char *argv[]) {
                 opt_scale = atof(optarg);
                 if( opt_scale <= 0)
                     throw pfs::Exception("scale must be positive");
+                break;
+            case 'k':
+                k << optarg;
+                k >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
                 break;
             case 'd':
                 opt_deghosting = atof(optarg);
@@ -307,6 +315,10 @@ void pfshdrraw(int argc, char *argv[]) {
                             ss >> rgb_corr[1][0] >> rgb_corr[1][1] >> rgb_corr[1][2];
                             ss >> rgb_corr[2][0] >> rgb_corr[2][1] >> rgb_corr[2][2];
                         }
+                        if ( comment.substr(begin, equal - begin) == "RGBcalibration"){
+                            istringstream ss(comment.substr(equal+1, comment.size()));
+                            ss >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
+                        }
                         if ( comment.substr(begin, equal - begin) == "LuminanceRGB"){
                             istringstream ss(comment.substr(equal+1, comment.size()));
                             ss >> vlambda[0] >> vlambda[1] >> vlambda[2];
@@ -362,9 +374,9 @@ void pfshdrraw(int argc, char *argv[]) {
                 fmax = info.factor;
                 float r, g, b;
                 for (int i = 0; i < size; i++) {
-                    r = (*X)(i) * rgb_corr[0][0] + (*Y)(i) * rgb_corr[0][1] + (*Z)(i) * rgb_corr[0][2];
-                    g = (*X)(i) * rgb_corr[1][0] + (*Y)(i) * rgb_corr[1][1] + (*Z)(i) * rgb_corr[1][2];
-                    b = (*X)(i) * rgb_corr[2][0] + (*Y)(i) * rgb_corr[2][1] + (*Z)(i) * rgb_corr[2][2];
+                    r = ((*X)(i) * rgb_corr[0][0] + (*Y)(i) * rgb_corr[0][1] + (*Z)(i) * rgb_corr[0][2]) * rgbcal[0];
+                    g = ((*X)(i) * rgb_corr[1][0] + (*Y)(i) * rgb_corr[1][1] + (*Z)(i) * rgb_corr[1][2]) * rgbcal[1];
+                    b = ((*X)(i) * rgb_corr[2][0] + (*Y)(i) * rgb_corr[2][1] + (*Z)(i) * rgb_corr[2][2]) * rgbcal[2];
                     std::cout << (*X)(i) << "\t" << (*Y)(i) << "\t" << (*Z)(i) << "\t";
 
                     pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
@@ -413,6 +425,16 @@ void pfshdrraw(int argc, char *argv[]) {
         oorange = oorange && (pmax > 1 - opt_saturation_offset_perc);
         pfsio.freeFrame(iframe);
     }
+//    VERBOSE_STR << rgbcal[0] << " " << rgbcal[1] << " " << rgbcal[2] << endl;
+    for (int i = 0; i < 3; i++){
+        for (int j = 0; j < 3; j++) {
+            rgb_corr[i][j] = rgb_corr[i][j] * rgbcal[i];
+        }
+    }
+//    VERBOSE_STR << rgb_corr[0][0] << " " << rgb_corr[0][1] << " " << rgb_corr[0][2] << endl;
+//    VERBOSE_STR << rgb_corr[1][0] << " " << rgb_corr[1][1] << " " << rgb_corr[1][2] << endl;
+//    VERBOSE_STR << rgb_corr[2][0] << " " << rgb_corr[2][1] << " " << rgb_corr[2][2] << endl;
+
     if (dataonly)
         return;
     if (frame_no < 1)

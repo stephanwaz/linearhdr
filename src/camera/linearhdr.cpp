@@ -209,6 +209,10 @@ int linear_Response(pfs::Array2D *out[],
         (*out[0])(j) = x * rgb_corr[0][0] + y * rgb_corr[0][1] + z * rgb_corr[0][2];
         (*out[1])(j) = x * rgb_corr[1][0] + y * rgb_corr[1][1] + z * rgb_corr[1][2];
         (*out[2])(j) = x * rgb_corr[2][0] + y * rgb_corr[2][1] + z * rgb_corr[2][2];
+        (*out[0])(j) = max((*out[0])(j), 0);
+        (*out[1])(j) = max((*out[1])(j), 0);
+        (*out[2])(j) = max((*out[2])(j), 0);
+
     }
 
     VERBOSE_STR << "Maximum Value: " << mmax[0] << ", " << mmax[1] << ", " << mmax[2] << std::endl;
