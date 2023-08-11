@@ -5,8 +5,9 @@ import os
 import re
 from math import log2
 from raytools import io
+from raytools.mapper import ViewMapper
 import numpy as np
-
+from scipy.interpolate import UnivariateSpline
 
 def camera_raw_values(img):
     ppm = img + "_raw.ppm"
@@ -149,6 +150,7 @@ def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None,
         if bad_pixels is not None:
             cs += f" -P {bad_pixels}"
         Popen(shlex.split(f"dcraw_emu -c 0 -4 -o 0 {cs} -Z {ppm} -k {black} -r 2 1 2 1 -S {white} {img}")).communicate()
+        print(f"dcraw_emu -c 0 -4 -o 0 {cs} -Z {ppm} -k {black} -r 2 1 2 1 -S {white} {img}", file=sys.stderr)
     rawinfo = info_from_exif(img, correct, fo=fo)
     return ppm, *rawinfo
 
@@ -285,3 +287,21 @@ def report_calibrate(ppms, sort='shutter', target=None, header=True):
     print("Average value:", avg/div, file=sys.stderr)
     print("min-max for in range exposures:", minv, maxv, file=sys.stderr)
     print("adjust -o and -r settings of linearhdr to change viable range", file=sys.stderr)
+
+
+def apply_vignetting_correction(img, vg, viewangle=180):
+    vm = ViewMapper(viewangle=viewangle)
+    imgv, vecs, _, _, _ = vm.init_img(img.shape[-1], features=img.shape[0])
+    ang = vm.degrees(vecs)
+    if vg.shape[1] == 4:
+        for i in range(3):
+            p = UnivariateSpline(vg[:, 0], vg[:, i+1], k=1, s=0)
+            vf = p(ang).reshape(img.shape[1:])
+            imgv[i] = img[i] * vf
+    else:
+        p = UnivariateSpline(vg[:, 0], vg[:, 1], k=1, s=0)
+        vf = p(ang).reshape(img.shape[1:])
+        imgv = img * vf
+    return imgv
+
+

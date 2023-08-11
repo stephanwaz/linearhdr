@@ -215,3 +215,29 @@ introduced by moving clouds and sun positions, by eliminating exposures that do 
 "nominal" will correct aperture by F = 2^(round(log2(fn^2) * 3) / 6) and
 exposure time by T = 2^(round(log2(1/T) * 3) / 3)
 
+
+
+Copyrights and Acknowledgements
+-------------------------------
+
+Copyright (C) 2023 Stephen Wasilewski
+
+Linearhdr uses LibRaw:
+
+Copyright (C) 2008-2021 LibRaw LLC
+LibRaw uses code from Dave Coffin’s dcraw.c utility (without RESTRICTED/GPL2 code):
+Copyright 1997-2018 by Dave Coffin, dcoffin a cybercom o net
+LibRaw uses DCB demosaic code by Jaceck Gozdz distributed under BSD license:
+Copyright (C) 2010, Jacek Gozdz (mailto:cuniek@kft.umcs.lublin.pl)
+LibRaw uses Roland Karlsson’s X3F tools source code, licensed under BSD license:
+Copyright (c) 2010, Roland Karlsson (roland@proxel.se)
+
+pfstools:
+
+Copyright (C) 2003,2004 Rafal Mantiuk and Grzegorz Krawczyk
+
+radiance:
+
+Radiance v5.4 Copyright (c) 1990 to 2022, The Regents of the University of
+California, through Lawrence Berkeley National Laboratory (subject to receipt
+of any required approvals from the U.S. Dept. of Energy).  All rights reserved.

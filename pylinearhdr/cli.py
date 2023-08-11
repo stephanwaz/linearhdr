@@ -1,8 +1,6 @@
 import os
-import shlex
 import shutil
 import sys
-from subprocess import Popen
 
 import numpy as np
 from clasp import click
@@ -86,13 +84,39 @@ def is_file_or_tup_int(ctx, param, s):
     except Exception:
         return clk.is_file(ctx, param, s)
     else:
-        path = clean_tmp(ctx)
-        f = open(path, 'w')
-        for p in pix:
-            print(f"{p[0]}\t{p[1]}\t0", file=f)
-        f.close()
-        return path
+        if pix is not None:
+            path = clean_tmp(ctx)
+            f = open(path, 'w')
+            for p in pix:
+                print(f"{p[0]}\t{p[1]}\t0", file=f)
+            f.close()
+            return path
+    return None
 
+
+vignetting_path = os.path.dirname(pylinearhdr.__file__) + f"/pylinearhdr_profiles"
+vignetting_files = [i.rsplit("/", 1)[-1] for i in sglob(f"{vignetting_path}/*.txt")]
+
+def is_vignette_file(ctx, param, s):
+    """checks input file string with recursive prompt
+
+    use os.environ['CLASP_PIPE'] = '1' in parent script
+    or set CLASP_PIPE=1
+    to disable prompt and avoid hanging process
+    """
+    if s in [None, 'None', 'none']:
+        return None
+    try:
+        if os.path.exists(s):
+            return s
+        else:
+            raise ValueError(s)
+    except ValueError as e:
+        s2 = f"{vignetting_path}/{s}"
+        if os.path.exists(s2):
+            return s2
+        else:
+            raise ValueError(f"{s} is not a file in current directory or {vignetting_path}")
 
 shared_run_opts = [
     click.option("-badpixels", callback=is_file_or_tup_int,
@@ -172,7 +196,7 @@ make_list_opts = [
 
 def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
                  crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None,
-                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, **kwargs):
+                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, **kwargs):
     """make list routine, use to generate input to linearhdr"""
     outf = sys.stdout
     if listonly:
@@ -199,6 +223,14 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         command = [f"linearhdr -r {range} -o {saturation} {hdropts} {outfn}"]
         if fisheye:
             command += ["pcomb -f fisheye_corr.cal -o - ", "getinfo -a 'VIEW= -vta -vh 180 -vv 180'"]
+        if vfile is not None:
+            ocmd = sys.argv
+            if "run" in ocmd:
+                ocmd = ocmd[:ocmd.index("run")]
+            else:
+                ocmd = ocmd[:ocmd.index("makelist")]
+            ocmd = " ".join(ocmd) + f" vignette - -vfile {vfile}"
+            command += [ocmd]
         pipeline(command, outfile=sys.stdout)
         if clean:
             for ppm in ppms:
@@ -218,6 +250,9 @@ def makelist(ctx, imgs, **kwargs):
 @main.command()
 @clk.shared_decs(make_list_opts + shared_run_opts)
 @click.option("--clean/--no-clean", default=True, help="delete ppm files after linearhdr")
+@click.option("-vfile", callback=is_vignette_file, help="vignetting file, rows should be angle(degrees) factor(s) either one column"
+                                                        "for luminance or 3 for RGB, apply in destination RGB space after lens "
+                                                        " corrections. system stored files :\n" + "\n".join(vignetting_files))
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def run(ctx, imgs, **kwargs):
     """make list routine, use to generate input to linearhdr"""
@@ -382,6 +417,25 @@ def badpixels(ctx, imgs, threshold=0.01, **kwargs):
     badpixi[:, 1] = yres - badpixi[:, 1] - 1
     for bp in badpixi:
         print("{}\t{}\t0".format(*bp))
+
+
+@main.command()
+@click.argument("img", callback=clk.is_file)
+@click.option("-vfile", callback=is_vignette_file, help="vignetting file, rows should be angle(degrees) factor(s) either one column"
+                                           "for luminance or 3 for RGB, apply in destination RGB space after lens "
+                                           " corrections. system stored files :\n" + "\n".join(vignetting_files))
+@clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
+def vignette(ctx, img, vfile=None, **kwargs):
+    """apply vignetting correction file
+    """
+    img, header = io.hdr2carray(img, header=True)
+    if vfile is None:
+        print("Warning, no vignetting applied!", file=sys.stderr)
+        imgv = img
+    else:
+        vg = np.loadtxt(vfile)
+        imgv = pl.apply_vignetting_correction(img, vg)
+    io.array2hdr(imgv, None, header=[f"VIGNETTING_CORRECTION= {vfile}"] + header)
 
 
 @main.result_callback()
