@@ -9,10 +9,15 @@ from raytools.mapper import ViewMapper
 import numpy as np
 from scipy.interpolate import UnivariateSpline
 
+
+PREDEFINED_COLORS = dict(rad=((0.640, 0.330, 0.290, 0.600, 0.150, 0.060), (0.3333, 0.3333)),
+                         srgb=((0.64,  0.33,  0.3,  0.6,  0.15,  0.06), (0.3127, 0.329)))
+
+
 def camera_raw_values(img):
     ppm = img + "_raw.ppm"
     hdr = img + "_raw.hdr"
-    Popen(shlex.split(f"dcraw_emu -disinterp -4 -o 0 -w -Z {ppm} {img}")).communicate()
+    Popen(shlex.split(f"rawconvert -disinterp -Z {ppm} {img}")).communicate()
     f = Popen(shlex.split(f"pfsin {ppm}"), stdout=PIPE)
     Popen(shlex.split(f"pfsout {hdr}"), stdin=f.stdout, stderr=PIPE).communicate()
     imrgb = io.hdr2carray(hdr)
@@ -23,23 +28,22 @@ def camera_raw_values(img):
 
 
 def get_xyz_cam(img):
-    rawinfo = Popen(shlex.split(f"raw-identify -v {img}"),
+    rawinfo = Popen(shlex.split(f"rawconvert -identify {img}"),
                     stdout=PIPE).communicate()[0].decode(sys.stdin.encoding)
-    a = rawinfo.rsplit("XYZ->CamRGB matrix:", 1)[1].strip().split()[0:9]
-    xyz_rgb = np.array([float(i) for i in a]).reshape(3,3)
+    a = rawinfo.rsplit("XYZ->CamRGB:", 1)[1].strip().split()[0:9]
+    xyz_rgb = np.array([float(i) for i in a]).reshape(3, 3)
     return xyz_rgb
 
 
-def get_cam_rgb(img):
-    rawinfo = Popen(shlex.split(f"raw-identify -v {img}"),
+def get_d65_cam(img):
+    rawinfo = Popen(shlex.split(f"rawconvert -identify {img}"),
                     stdout=PIPE).communicate()[0].decode(sys.stdin.encoding)
-    a = re.search(r"Derived D65 multipliers: .*", rawinfo)
-    rgb = " ".join(a.group(0).strip().rsplit(None, 3)[-3:])
-    return rgb
+    a = rawinfo.rsplit("D65_multips:", 1)[1].strip().split()[0:3]
+    xyz_rgb = np.array([float(i) for i in a])
+    return xyz_rgb
 
 
-
-def info_from_exif(img, correct, times=True, fo=None):
+def info_from_exif(img, correct, times=True, fo=None, shutterc=None):
     if fo is None:
         anom = []
         aexc = []
@@ -61,6 +65,8 @@ def info_from_exif(img, correct, times=True, fo=None):
     aperture = float(rawinfo[5].strip())
     if correct:
         shutter = 2**(-round(log2(1/shutter)*3)/3)
+        if shutterc is not None:
+            shutter = shutter * np.exp(shutterc*shutter)
         apmat = np.isclose(aperture, anom)
         if np.any(apmat):
             aperture = np.array(aexc)[apmat][0]
@@ -89,7 +95,7 @@ def header_info(img, fields=("ColorTempAsShot", "Colorspace")):
 
 def name_by_exif(img, prefix=None):
     suff = img.rsplit(".", 1)[1]
-    hinfo = get_info(img, ("ISO",  "Aperture",  "ShutterSpeed",  "ColorTempAsShot"))
+    hinfo = get_info(img, ("ISO",  "Aperture",  "ShutterSpeed"))
     hinfo = re.sub(r"\s+:\s+", " ", hinfo)
     if prefix is None:
         outn = img.rsplit(".", 1)[0]
@@ -106,9 +112,6 @@ def name_by_exif(img, prefix=None):
             if "/" in v:
                 v = v.split("/")[-1]
             k = "S-"
-        elif k == "ColorTempAsShot":
-            k = ""
-            v += "k"
         outn += "_" + k + v
     return outn + "." + suff
 
@@ -135,8 +138,9 @@ def process_dcraw_opt(val, img, callexif=True, avg=False):
     raise ValueError(f"Bad option given '{val}' could not be processed as a exiftool parameter")
 
 
-def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None, bad_pixels=None,
-                  black="PerChannelBlackLevel", white="LinearityUpperMargin", fo=None, ppm=None):
+def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None, bad_pixels=None, bayer=False,
+                  black="PerChannelBlackLevel", white="LinearityUpperMargin", fo=None, shutterc=None, ppm=None):
+    correct = correct or fo or shutterc
     black = process_dcraw_opt(black, img, avg=True)
     white = process_dcraw_opt(white, img, avg=True)
     if ppm is None:
@@ -149,9 +153,10 @@ def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None,
             cs = "-B {} {} {} {}".format(*crop)
         if bad_pixels is not None:
             cs += f" -P {bad_pixels}"
-        Popen(shlex.split(f"dcraw_emu -c 0 -4 -o 0 {cs} -Z {ppm} -k {black} -r 2 1 2 1 -S {white} {img}")).communicate()
-        print(f"dcraw_emu -c 0 -4 -o 0 {cs} -Z {ppm} -k {black} -r 2 1 2 1 -S {white} {img}", file=sys.stderr)
-    rawinfo = info_from_exif(img, correct, fo=fo)
+        if bayer:
+            cs += " -disinterp"
+        Popen(shlex.split(f"rawconvert {cs} -Z {ppm} -k {black} -S {white} {img}")).communicate()
+    rawinfo = info_from_exif(img, correct, fo=fo, shutterc=shutterc)
     return ppm, *rawinfo
 
 
@@ -160,7 +165,7 @@ def process_colorspace_option(colorspace):
     try:
         colorspace = [float(i) for i in colorspace.split()]
     except ValueError:
-        if colorspace in ['rad', 'srgb']:
+        if colorspace in ['rad', 'srgb', 'raw']:
             return colorspace
     else:
         if len(colorspace) == 8:
@@ -178,15 +183,23 @@ def pw_mtx(p, w):
     return np.einsum('ij,j->ij', pxyz, c)
 
 
+def mtx_pw(mtx):
+    """calculate primaries and whitepoint from rgb->xyz matrix"""
+    mtx = np.asarray(mtx).reshape(3,3)
+    primaries = (mtx[0:2]/np.sum(mtx, axis=0)).T.ravel()
+    whitepoint = np.sum(mtx, axis=1)[0:2]/np.sum(mtx)
+    return primaries, whitepoint
+
+
 def cam_color_mtx(xyzcam, cs='rad', cscale=None, normalize=True):
     """calculate camRGB->RGB from camera xyz->cam (from raw-identify or custom) and rgb primaries/whitepoint """
     # xyz->camRGB from adobeDNG/libraw/dcraw
     if cs == 'raw':
         return np.eye(3), [f"# Camera2RGB= 1 0 0 0 1 0 0 0 1"]
     if cs == 'rad':
-        cs = ((0.640, 0.330, 0.290, 0.600, 0.150, 0.060), (0.3333, 0.3333))
+        cs = PREDEFINED_COLORS['rad']
     elif cs == 'srgb':
-        cs = ((0.64,  0.33,  0.3,  0.6,  0.15,  0.06), (0.3127, 0.329))
+        cs = PREDEFINED_COLORS['srgb']
     else:
         cs = (np.asarray(cs[0]).ravel(), np.asarray(cs[1]).ravel())
     rgb_xyz = pw_mtx(*cs)
@@ -213,7 +226,7 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None, normalize=True):
     return cam_rgb, header
 
 
-def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLevel", xyzcam=None, cscale=None,
+def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLevel", xyzcam=None, cscale=None, shutterc=None,
                     white="LinearityUpperMargin", colorspace='rad', fo=None, scale=1.0, saturation=0.01, r=0.01):
     if xyzcam is None:
         normalize = True
@@ -222,8 +235,7 @@ def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLev
         normalize = False
     cam_rgb, header = cam_color_mtx(xyzcam, colorspace, cscale=cscale, normalize=normalize)
     ppm = img + "_calibrate.ppm"
-
-    ppm, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white, ppm=ppm, fo=fo)
+    ppm, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white, ppm=ppm, fo=fo, shutterc=shutterc)
     iso = iso/scale
     txt = img + "_calibrate.txt"
     f = open(txt, 'w')
@@ -276,9 +288,9 @@ def report_calibrate(ppms, sort='shutter', target=None, header=True):
     ppms = sorted(ppms, key=lambda x: x[1])
     for ppm, sh, ap, iso, rgb in sorted(ppms, key=lambda x: x[si]):
         if target:
-            print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04f}" for i in rgb]) + f"\t{rgb[6]/target:.04f}")
+            print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04g}" for i in rgb]) + f"\t{rgb[6]/target:.04g}")
         else:
-            print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04f}" for i in rgb]))
+            print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04g}" for i in rgb]))
         if rgb[-2] == 0 and rgb[-1] == 0:
             minv = min(minv, rgb[-4])
             maxv = max(maxv, rgb[-4])
@@ -305,3 +317,15 @@ def apply_vignetting_correction(img, vg, viewangle=180):
     return imgv
 
 
+def str_primaries_2_mtx(inp, mtx=None):
+    if mtx:
+        rgb2xyz = np.linalg.inv(np.asarray([float(i) for i in mtx.strip().split()]).reshape(3,3))
+        ps, ws = mtx_pw(rgb2xyz)
+    elif inp in PREDEFINED_COLORS.keys():
+        rgb2xyz = pw_mtx(*PREDEFINED_COLORS[inp])
+        ps, ws = PREDEFINED_COLORS[inp]
+    else:
+        inp = np.fromstring(inp)
+        rgb2xyz = pw_mtx(inp[0:6], inp[6:8])
+        ps, ws = (inp[0:6], inp[6:8])
+    return rgb2xyz, ps, ws

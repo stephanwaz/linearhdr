@@ -12,11 +12,11 @@ def profile_angles(a, rh=0.0, rv=0.0):
     if rh == 0:
         ha = a
     else:
-        ha = translate.rotate_elem(np.atleast_2d(a), rh, 1)
+        ha = translate.rotate_elem(np.atleast_2d(a), -rh, 1)
     if rv == 0:
         va = a
     else:
-        va = translate.rotate_elem(np.atleast_2d(a), rv, 1)
+        va = translate.rotate_elem(np.atleast_2d(a), -rv, 1)
     return np.stack((np.arctan2(va[:, 0], va[:, 1]), np.arctan2(ha[:, 2], ha[:, 1]))).T
 
 
@@ -26,7 +26,7 @@ def blend_bands(x, b, c=None):
     return np.where(x > b, np.where(x < b+c, np.cos((x-b)*np.pi/c)/2+.5, 0), 1)
 
 
-def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=180.0, srcsize=6.7967e-05, bw=2.0, flip=False,
+def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-05, bw=2.0, flip=False,
                envmap=False, sunloc=None):
     vm = ViewMapper(viewangle=180)
     res = hdata.shape[-1]
@@ -74,11 +74,11 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=180.0, srcsize=6.7967
         mask[ll] = 1 - blend_bands((x_max - idx[:, None])[ll], band)
 
     # outer peak area (for max replacement)
-    peakr = 2.5
+    peakr = 2
     # area around peak to replace with interpolation
-    rpeakr = 2
+    rpeakr = 1.5
     # inner peak area (for donut interpolation)
-    cpeakr = 1.5
+    cpeakr = 1
 
     # isolate pixels near peak where blending interacts
     vms = ViewMapper(dxyz=pxyz, viewangle=bw*peakr*2)
@@ -123,12 +123,14 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=180.0, srcsize=6.7967
     flare[flare < 0] = 0
     sol_luminance = np.sum(flare * omega[None, vm_valid], axis=1) / srcsize
 
-    if envmap:
-        return blend, (*pxyz, srcsize, sol_luminance)
+    if envmap is not None:
+        skyonly = np.copy(blend)
+        source = (*pxyz, srcsize, sol_luminance)
     else:
-        # draw source on image
-        mask = vm.in_view(v)
-        src = SrcViewPoint(None, np.asarray(pxyz).reshape(-1, 3), sol_luminance, res=1)
-        src.add_to_img(blend, v, mask, vm=vm)
+        skyonly = source = None
+    # draw source on image
+    mask = vm.in_view(v)
+    src = SrcViewPoint(None, np.asarray(pxyz).reshape(-1, 3), sol_luminance, res=1)
+    src.add_to_img(blend, v, mask, vm=vm)
 
-        return blend
+    return blend, skyonly, source

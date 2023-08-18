@@ -139,6 +139,7 @@ void printHelp() {
                     "\t\tuse linearhdr_calibrate to calculate\n"
                     "\t[--cull, -c]: throw away extra exposures that are not needed to keep output in range\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
+                    "\t[--bayer, -B]: expect mosaic input (rawconvert --disinterp) ignores color correction in exposure_list header\n"
                     "\t[--pfs, -P]: output pfs stream\n"
                     "\t[--exact, -e]: input camera values interpreted as exact (default=True)\n"
                     "\t[--nominal, -n]: input camera values interpreted as nominal (default=False)\n"
@@ -170,6 +171,7 @@ void pfshdrraw(int argc, char *argv[]) {
     bool dataonly = false;
     bool rgbe = true;
     bool nominal = false;
+    bool isbayer = false;
     float oor_high = 1e-30;
     float oor_low = 1e30;
     float rgb_corr[3][3] = {{1.0, 0.0, 0.0},
@@ -188,6 +190,7 @@ void pfshdrraw(int argc, char *argv[]) {
             {"rgbe",    no_argument,       nullptr, 'R'},
             {"pfs",    no_argument,       nullptr, 'P'},
             {"exact",    no_argument,       nullptr, 'e'},
+            {"bayer",    no_argument,       nullptr, 'B'},
             {"nominal",    no_argument,       nullptr, 'n'},
             {"deghosting", required_argument, nullptr, 'd'},
             {"tsv", no_argument, nullptr, 't'},
@@ -202,7 +205,7 @@ void pfshdrraw(int argc, char *argv[]) {
 
     std::stringstream k;
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevuRd:s:r:o:m:x:k:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevuBRd:s:r:o:m:x:k:", cmdLineOptions, &optionIndex)) != -1) {
 
         switch (c) {
             /* help */
@@ -218,6 +221,9 @@ void pfshdrraw(int argc, char *argv[]) {
                 break;
             case 'e':
                 nominal = false;
+                break;
+            case 'B':
+                isbayer = true;
                 break;
             case 'x':
                 oor_high = atof(optarg);
@@ -309,13 +315,13 @@ void pfshdrraw(int argc, char *argv[]) {
                         std::string comment = iss.str();
                         const uint begin =  comment.find_first_not_of("# \t");
                         const uint equal = comment.find_first_of('=');
-                        if ( comment.substr(begin, equal - begin) == "Camera2RGB"){
+                        if (!isbayer && comment.substr(begin, equal - begin) == "Camera2RGB"){
                             istringstream ss(comment.substr(equal+1, comment.size()));
                             ss >> rgb_corr[0][0] >> rgb_corr[0][1] >> rgb_corr[0][2];
                             ss >> rgb_corr[1][0] >> rgb_corr[1][1] >> rgb_corr[1][2];
                             ss >> rgb_corr[2][0] >> rgb_corr[2][1] >> rgb_corr[2][2];
                         }
-                        if ( comment.substr(begin, equal - begin) == "RGBcalibration"){
+                        if (!isbayer && comment.substr(begin, equal - begin) == "RGBcalibration"){
                             istringstream ss(comment.substr(equal+1, comment.size()));
                             ss >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
                         }
@@ -466,11 +472,11 @@ void pfshdrraw(int argc, char *argv[]) {
 
     VERBOSE_STR << "applying response..." << endl;
     sp = linear_Response(RGB_out, exposures, opt_saturation_offset_perc, opt_black_offset_perc,
-                         opt_deghosting, opt_scale, rgb_corr, oor_high, oor_low);
+                         opt_deghosting, opt_scale, rgb_corr, oor_high, oor_low, isbayer);
 
     if (sp > 0) {
         float perc = ceilf(100.0f * sp / size);
-        VERBOSE_STR << "saturated pixels found in " << perc << "% of the image!" << endl;
+        std::cerr << PROG_NAME << ": " << "saturated pixels found in " << perc << "% (" << sp << " pixels) of the image!" << endl;
     }
     if (rgbe){
         RGBEWriter writer( stdout, true );

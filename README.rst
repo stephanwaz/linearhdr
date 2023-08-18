@@ -10,7 +10,6 @@ Dependencies
 
 For usage:
 
-    - dcraw_emu : https://www.libraw.org/download
     - exiftool : https://exiftool.org/
     - radiance (optional) : https://github.com/LBNL-ETA/Radiance/releases
     - pfstools (optional) : https://pfstools.sourceforge.net/pfstmo.html
@@ -23,6 +22,13 @@ For compiling:
 
 Installation
 ------------
+
+To build this directory, libraw needs to be included as a submodule::
+
+	git clone https://github.com/LibRaw/LibRaw.git
+	cd LibRaw
+	git fetch --tags --all
+	git checkout 0.21.1
 
 From a command line in this directory::
 
@@ -39,6 +45,8 @@ This will install three programs::
     linearhdr: the main c++ executable
     convertcolor: a utility compatible with pfstools
     linearhdr_extract: a shell script for processing image regions
+	convertraw: modified dcraw_emu with fewer options, modified defaults, and necessary changes to dcraw_process
+	
 
 
 Additional optional python scripts can be installed with::

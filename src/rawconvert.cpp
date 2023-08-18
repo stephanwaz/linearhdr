@@ -59,79 +59,26 @@ it under the terms of the one of two licenses as you choose:
 
 void usage(const char *prog)
 {
-  printf("dcraw_emu: almost complete dcraw emulator\n");
+  printf("rawconvert: dcraw_emu fork that ensures consistent scaling of raw output as raw RGB\n");
   printf("Usage:  %s [OPTION]... [FILE]...\n", prog);
-  printf("-c float-num       Set adjust maximum threshold (default 0.75)\n"
-         "-v        Verbose: print progress messages (repeated -v will add "
+  printf("-v        Verbose: print progress messages (repeated -v will add "
          "verbosity)\n"
-         "-w        Use camera white balance, if possible\n"
-         "-a        Average the whole image for white balance\n"
-         "-A <x y w h> Average a grey box for white balance\n"
-         "-r <r g b g> Set custom white balance\n"
-         "+M/-M     Use/don't use an embedded color matrix\n"
-         "-C <r b>  Correct chromatic aberration\n"
          "-P <file> Fix the dead pixels listed in this file\n"
          "-K <file> Subtract dark frame (16-bit raw PGM)\n"
          "-k <num>  Set the darkness level\n"
          "-S <num>  Set the saturation level\n"
-         "-R <num>  Set raw processing options to num\n"
          "-n <num>  Set threshold for wavelet denoising\n"
-         "-H [0-9]  Highlight mode (0=clip, 1=unclip, 2=blend, 3+=rebuild)\n"
-         "-t [0-7]  Flip image (0=none, 3=180, 5=90CCW, 6=90CW)\n"
-         "-o [0-8]  Output colorspace (raw,sRGB,Adobe,Wide,ProPhoto,XYZ,ACES,\n"
-         "          DCI-P3,Rec2020)\n"
-#ifndef NO_LCMS
-         "-o file   Output ICC profile\n"
-         "-p file   Camera input profile (use \'embed\' for embedded profile)\n"
-#endif
-         "-j        Don't stretch or rotate raw pixels\n"
-         "-W        Don't automatically brighten the image\n"
-         "-b <num>  Adjust brightness (default = 1.0)\n"
-         "-q N      Set the interpolation quality:\n"
-         "          0 - linear, 1 - VNG, 2 - PPG, 3 - AHD, 4 - DCB\n"
-         "          11 - DHT, 12 - AAHD\n"
-         "-h        Half-size color image (twice as fast as \"-q 0\")\n"
-         "-f        Interpolate RGGB as four colors\n"
-         "-m <num>  Apply a 3x3 median filter to R-G and B-G\n"
-         "-s [0..N-1] Select one raw image from input file\n"
-         "-4        Linear 16-bit, same as \"-6 -W -g 1 1\n"
-         "-6        Write 16-bit output\n"
-         "-g pow ts Set gamma curve to gamma pow and toe slope ts (default = "
-         "2.222 4.5)\n"
          "-T        Write TIFF instead of PPM\n"
          "-G        Use green_matching() filter\n"
          "-B <x y w h> use cropbox\n"
-         "-F        Use FILE I/O instead of streambuf API\n"
          "-Z <suf>  Output filename generation rules\n"
          "          .suf => append .suf to input name, keeping existing suffix "
          "too\n"
          "           suf => replace input filename last extension\n"
          "          - => output to stdout\n"
          "          filename.suf => output to filename.suf\n"
-         "-timing   Detailed timing report\n"
-         "-fbdd N   0 - disable FBDD noise reduction (default), 1 - light "
-         "FBDD, 2 - full\n"
-         "-dcbi N   Number of extra DCD iterations (default - 0)\n"
-         "-dcbe     DCB color enhance\n"
-         "-aexpo <e p> exposure correction\n"
-         "-apentax4shot enables merge of 4-shot pentax files\n"
-         "-apentax4shotorder 3102 sets pentax 4-shot alignment order\n"
-#ifdef USE_RAWSPEED_BITS
-         "-arsbits V Set use_rawspeed to V\n"
-#endif
-         "-mmap     Use memory mmaped buffer instead of plain FILE I/O\n"
-         "-mem	   Use memory buffer instead of FILE I/O\n"
-         "-disars   Do not use RawSpeed library\n"
          "-disinterp Do not run interpolation step\n"
-         "-dsrawrgb1 Disable YCbCr to RGB conversion for sRAW (Cb/Cr "
-         "interpolation enabled)\n"
-         "-dsrawrgb2 Disable YCbCr to RGB conversion for sRAW (Cb/Cr "
-         "interpolation disabled)\n"
-#ifdef USE_DNGSDK
-         "-dngsdk   Use Adobe DNG SDK for DNG decode\n"
-         "-dngflags N set DNG decoding options to value N\n"
-#endif
-         "-doutputflags N set params.output_flags to N\n"
+         "-identify skip all processing and simply print XYZ->CamRGB matrix\n"
   );
   exit(1);
 }
@@ -248,19 +195,13 @@ int main(int argc, char *argv[])
 
   LibRaw RawProcessor;
   int i, arg, c, ret;
+  int identify = 0;
   char opm, opt, *cp, *sp;
-  int use_timing = 0, use_mem = 0, use_mmap = 0;
   char *outext = NULL;
-#ifdef USE_DNGSDK
-  dng_host *dnghost = NULL;
-#endif
-  struct file_mapping mapping;
-  void *iobuffer = 0;
 #ifdef OUT
 #undef OUT
 #endif
 #define OUT RawProcessor.imgdata.params
-#define OUTR RawProcessor.imgdata.rawparams
   OUT.user_mul[1] = OUT.user_mul[3] = 1;
   OUT.user_mul[0] = OUT.user_mul[2] = 2;
   argv[argc] = (char *)"";
@@ -275,14 +216,17 @@ int main(int argc, char *argv[])
           fprintf(stderr, "Non-numeric argument to \"-%c\"\n", opt);
           return 1;
         }
-    if (!strchr("ftdeam", opt) && argv[arg - 1][2]) {
-      fprintf(stderr, "Unknown option \"%s\".\n", argv[arg - 1]);
-      continue;
-    }
+//    if (!strchr("ftdeam", opt) && argv[arg - 1][2]) {
+//      fprintf(stderr, "Unknown option \"%s\".\n", argv[arg - 1]);
+//      continue;
+//    }
     switch (opt)
     {
     case 'v':
       verbosity++;
+      break;
+    case 'i':
+      identify = 1;
       break;
     case 'P':
       OUT.bad_pixels = argv[arg++];
@@ -307,9 +251,18 @@ int main(int argc, char *argv[])
     case 'T':
       OUT.output_tiff = 1;
       break;
+    case 'G':
+        OUT.green_matching = 1;
+        break;
     case 'Z':
       outext = strdup(argv[arg++]);
       break;
+    case 'd':
+        if (!strcmp(optstr, "-disinterp"))
+            OUT.no_interpolation = 1;
+        else
+            fprintf(stderr, "Unknown option \"%s\".\n", argv[arg - 1]);
+        break;
     default:
       fprintf(stderr, "Unknown option \"-%c\".\n", opt);
       break;
@@ -332,8 +285,6 @@ int main(int argc, char *argv[])
 #define T RawProcessor.imgdata.thumbnail
 #define P2 RawProcessor.imgdata.other
 
-  if (outext && !strcmp(outext, "-"))
-    use_timing = verbosity = 0;
 
   if (verbosity > 1)
     RawProcessor.set_progress_handler(my_progress_callback,
@@ -354,6 +305,17 @@ int main(int argc, char *argv[])
 
 
     ret = RawProcessor.open_file(argv[arg]);
+
+      if (identify){
+          fprintf(stdout, "XYZ->CamRGB:");
+          for (int r = 0; r < P1.colors; r++)                                                                            \
+            fprintf(stdout, "\t%6.4f\t%6.4f\t%6.4f", C.cam_xyz[r][0], C.cam_xyz[r][1], C.cam_xyz[r][2]);
+          fprintf(stdout, "\nD65_multips:");
+          for (int c = 0; c < P1.colors; c++)
+              fprintf(stdout, "\t%f", C.pre_mul[c]);
+          fprintf(stdout, "\n");
+          return 0;
+      }
 
       if (ret != LIBRAW_SUCCESS)
       {

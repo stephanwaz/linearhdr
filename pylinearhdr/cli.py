@@ -29,10 +29,34 @@ def get_profile(profile, forceexist=True):
     if os.path.isfile(f) or not forceexist:
         return f
     else:
-        raise ValueError(f"{profile} profile not found. choose from {global_profiles} or use -saveprofile")
+        print(f"{profile} profile not found in {d}/pylinearhdr_profiles/. choose from {global_profiles} or use -saveprofile", file=sys.stderr)
+        raise click.Abort()
 
 
 global_profiles = get_profiles()
+
+@clk.pretty_name("HDR, TSV, FLOATS,FLOATS")
+def hdr_data_load(ctx, param, s):
+    """read np array from command line
+
+    trys np.load (numpy binary), then np.loadtxt (space seperated txt file)
+    then split row by spaces and columns by commas.
+    """
+    if s is None:
+        return s
+    if s == '-':
+        s = clk.tmp_stdin(ctx)
+    if os.path.exists(s):
+        try:
+            ar = io.load_txt(s)
+        except ValueError:
+            ar = s
+        else:
+            if len(ar.shape) == 1:
+                ar = ar.reshape(-1, 3)
+        return ar
+    else:
+        return np.array([[float(i) for i in j.split(',')] for j in s.split()]).reshape(-1, 3)
 
 
 @click.group(invoke_without_command=True)
@@ -65,8 +89,7 @@ def main(ctx, config=None, profile=None, save=None, n=None,  **kwargs):
         nprofile = get_profile(save, False)
         shutil.copy(config, nprofile)
     if config is None and profile is not None:
-        if profile in global_profiles:
-            config = get_profile(profile)
+        config = get_profile(profile)
     if ctx.invoked_subcommand is not None:
         os.environ['CLASP_PIPE'] = '1'
         raytools.io.set_nproc(n)
@@ -123,11 +146,11 @@ shared_run_opts = [
                                 help="file of bad pixels (rows: xpix ypix 0) where xpix is from left and ypix is "
                                      "from top or list of bad pixes x1,y1 x2,y2 etc."),
     click.option("-black", default="PerChannelBlackLevel",
-                help="dcraw_emu darkness level. either a number(s) or exiftool key, it is critical this is kept "
+                help="rawconvert darkness level. either a number(s) or exiftool key, it is critical this is kept "
                      "consistent between calibration and make_list/run. Possible options: AverageBlackLevel, "
                      "PerChannelBlackLevel, 2049 '2049 2049 2049 2049'"),
     click.option("-white", default="LinearityUpperMargin",
-                help="dcraw_emu saturation level. either a number or exiftool key, it is critical this is kept "
+                help="rawconvert saturation level. either a number or exiftool key, it is critical this is kept "
                      " consistent between calibration and make_list/run. Possible options: NormalWhiteLevel, "
                      "SpecularWhiteLevel, LinearityUpperMargin, 10000"),
     click.option("-colorspace", default='rad',
@@ -142,11 +165,21 @@ shared_run_opts = [
                  help="if given, sets --correct to True. pairs of nominal/exact aperture values to correct. any aperture"
                       " not given will use the standard correction. for example give 11,11.4 22,23 to override standard"
                       " corrections for F11 and F22 (would be 11.31 and 22.63)"),
+    click.option("-shutterc", "-sc", type=float,
+                 help="if given, sets --correct to True. for correcting shutter speed. takes a single value 'A' "
+                      "interpreted as: shutter=s*exp(A*s),  where s is the corrected (true power of 2) shutter speed. "
+                      "this curve can be derived from a  sequence of hdr images using single files taken with "
+                      "different shutter speeds. fit the function y=exp(A*s) where y = lum_s0/lum_st and lum_s0 is "
+                      "the luminance of the  target at the longest exposure time. this can be done with an "
+                      "exponential trendline in excel (make sure set intercept=1), or with "
+                      "scipy.optimize.curve_fit(lambda t,a: np.exp(a*t),  x,  y, p0=(-1e-8,))"),
     click.option("-scale", default=1.0, help="calibration scale factor (applies to ISO, so do not use -s with linearhdr)"),
     click.option("-cscale", callback=clk.split_float, help="color calibration scale factor (applies via header, same as linearhdr -k)"),
     click.option("-nd", default=0.0, help="additional ND filter (applies to ISO, so do not use -s with linearhdr)"),
     click.option("-saturation", "-saturation-offset", "-s", default=0.01, help="saturation offset, if white is not LinearityUpperMargin, this must be changed"),
     click.option("-range", "-r", default=0.01, help="lower range of single raw exposure"),
+    click.option("--verbose/--no-verbose", default=False, help="passed to linearhdr"),
+    click.option("--bayer/--no-bayer", default=False, help="do not interpolate raw channels. forces -colorspace to 'raw'")
 ]
 
 
@@ -160,16 +193,22 @@ shared_run_opts = [
 @clk.shared_decs(shared_run_opts)
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.01, range=0.01, hdropts="",
-              black="AverageBlackLevel", white="AverageBlackLevel", cscale=None,
-              colorspace='rad', fo=None, sort='shutter', target=None, header=True, xyzcam=None, **kwargs):
+              black="AverageBlackLevel", white="AverageBlackLevel", cscale=None, shutterc=None,
+              colorspace='rad', fo=None, sort='shutter', target=None, header=True, xyzcam=None, verbose=False,
+              bayer=False, **kwargs):
     """calibration routine, see README.rst
 
     imgs: list of images
     crop: help="<left> <upper> <width> <height>"
     """
+    if verbose:
+        hdropts += " --verbose"
+    if bayer:
+        colorspace = 'raw'
+        hdropts += " -B"
     colorspace = pl.process_colorspace_option(colorspace)
-    ppms = pool_call(pl.calibrate_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black,
-                     white=white, colorspace=colorspace, fo=fo, scale=scale * 10**nd, cscale=cscale, saturation=saturation, r=range, xyzcam=xyzcam)
+    ppms = pool_call(pl.calibrate_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black, pbar=False, shutterc=shutterc,
+                     white=white, colorspace=colorspace, fo=fo, scale=scale * 10**nd, cscale=cscale, saturation=saturation, r=range, xyzcam=xyzcam, bayer=bayer)
     pl.report_calibrate(ppms, sort=sort, target=target, header=header)
 
 
@@ -181,7 +220,7 @@ make_list_opts = [
                  help="apply fisheye_corr to 180 degree image (must be properly cropped and equiangular). "
                       "requires pcomb and RAYPATH"),
      click.option("--overwrite/--no-overwrite", default=False,
-                   help="run dcraw_emu even if output file exists"),
+                   help="run rawconvert even if output file exists"),
      click.option("-header-line", '-hl', multiple=True,
                    help="lines to append to HDR header, e.g. LOCATION= 46.522833,6.580500"),
      click.option("--correct/--no-correct", default=True,
@@ -195,10 +234,16 @@ make_list_opts = [
 
 
 def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
-                 crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None,
-                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, **kwargs):
+                 crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
+                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, bayer=False, **kwargs):
     """make list routine, use to generate input to linearhdr"""
+    if verbose:
+        hdropts += " --verbose"
+    if bayer:
+        colorspace = 'raw'
+        hdropts += " -B"
     outf = sys.stdout
+    outfn = "<makelist.txt>"
     if listonly:
         shell = False
         overwrite = False
@@ -207,8 +252,8 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         outf = open(outfn, 'w')
         if not correct:
             hdropts += " --nominal"
-    ppms = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo,
-                     listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False)
+    ppms = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, bayer=bayer,
+                     shutterc=shutterc, listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False, pbar=False)
     if xyzcam is None:
         normalize = True
         xyzcam = pl.get_xyz_cam(imgs[0])
@@ -218,24 +263,28 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
     for h in header:
         print(h, file=outf)
     pl.report(ppms, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
+
+    command = [f"linearhdr -r {range} -o {saturation} {hdropts} {outfn}"]
+    if fisheye:
+        command += ["pcomb -f fisheye_corr.cal -o - ", "getinfo -a 'VIEW= -vta -vh 180 -vv 180'"]
+    if vfile is not None:
+        ocmd = sys.argv
+        if "run" in ocmd:
+            ocmd = ocmd[:ocmd.index("run")]
+        else:
+            ocmd = ocmd[:ocmd.index("makelist")]
+        ocmd = " ".join(ocmd) + f" vignette - -vfile {vfile}"
+        command += [ocmd]
+
     if callhdr:
         outf.close()
-        command = [f"linearhdr -r {range} -o {saturation} {hdropts} {outfn}"]
-        if fisheye:
-            command += ["pcomb -f fisheye_corr.cal -o - ", "getinfo -a 'VIEW= -vta -vh 180 -vv 180'"]
-        if vfile is not None:
-            ocmd = sys.argv
-            if "run" in ocmd:
-                ocmd = ocmd[:ocmd.index("run")]
-            else:
-                ocmd = ocmd[:ocmd.index("makelist")]
-            ocmd = " ".join(ocmd) + f" vignette - -vfile {vfile}"
-            command += [ocmd]
         pipeline(command, outfile=sys.stdout)
         if clean:
             for ppm in ppms:
                 os.remove(ppm[0])
         clk.tmp_clean(ctx)
+    else:
+        print(" | ".join(command), file=sys.stderr)
 
 
 @main.command()
@@ -265,11 +314,11 @@ def run(ctx, imgs, **kwargs):
 @click.argument("imgn", callback=clk.is_file)
 @click.option("-outf", default="blended.hdr",
               help="output destination")
-@click.option("-roh", default=0.0,
+@click.option("-roh", default=2.0,
               help="rotation correction (degrees ccw) for horizontal band")
-@click.option("-rov", default=0.0,
+@click.option("-rov", default=2.0,
               help="rotation correction (degrees ccw) for vertical band")
-@click.option("-sfov", default=180.0,
+@click.option("-sfov", default=2.0,
               help="field of view around shaded source that is valid in imgn (in case of partial ND filter)")
 @click.option("-srcsize", default=6.7967e-05,
               help="solid angle of shaded source (steradians)")
@@ -281,10 +330,10 @@ def run(ctx, imgs, **kwargs):
                    "imgn.")
 @click.option("--flip/--no-flip", default=False,
               help="by default the imgh will be used in the UL and LR quadrants, flip=True will use imgh UR and LL")
-@click.option("--envmap/--no-envmap", default=False,
-              help="do not add source to image, instead, return as radiance source description")
+@click.option("-envmap",
+              help="additionally save an hdr file suitable for use as an environment map, source information is in the header")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov=4.0, srcsize=6.7967e-05, bw=2.0, flip=False, envmap=False, sunloc=None,
+def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=2.0, rov=2.0, sfov=2.0, srcsize=6.7967e-05, bw=2.0, flip=False, envmap=None, sunloc=None,
                **kwargs):
     """merge set of three images with horizontal, vertical and no shadow band all images are assumed to be 180 degree
     angular fisheye.
@@ -293,24 +342,30 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
     imgv: hdr with veritcal aligned shadowband
     imgn: hdr with no shadowband
     """
-    hdata = io.hdr2carray(imgh)
-    vdata = io.hdr2carray(imgv)
-    sdata = io.hdr2carray(imgn)
-    blended = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw, flip=flip,
-                            envmap=envmap, sunloc=sunloc)
-    header = imagetools.hdr2vm(imgh).header()
-    if envmap:
-        radout = outf.rsplit(".", 1)[0] + ".rad"
-        f = open(radout, 'w')
-        srcrad = (srcsize/np.pi)**.5 * 180/np.pi * 2
-        f.write("void light sun 0 0 3 {} {} {}\n".format(*blended[1][-1]))
-        f.write("sun source solar 0 0 4 {} {} {} {}\n\n".format(*blended[1][0:3], srcrad))
-        f.write(f"void colorpict imgfunc\n7 red green blue {outf} fisheye.cal fish_u fish_v\n0 0\n")
-        f.write("imgfunc glow imgglow 0 0 4 1 1 1 0\n")
-        f.write("imgglow source sky 0 0 4 0 1 0 180\n")
-        io.carray2hdr(blended[0], outf, [header])
-    else:
-        io.carray2hdr(blended, outf, [header])
+    if flip:
+        rov = -rov
+        roh = -roh
+    hdata, hh = io.hdr2carray(imgh, header=True)
+    vdata, hv = io.hdr2carray(imgv, header=True)
+    sdata, hs = io.hdr2carray(imgn, header=True)
+    blended, skyonly, source = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw, flip=flip,
+                                             envmap=envmap, sunloc=sunloc)
+    header = [imagetools.hdr2vm(imgh).header()] + hh + hv + hs
+    io.carray2hdr(blended, outf, header)
+    if skyonly is not None:
+        io.carray2hdr(skyonly, envmap, header)
+    # if envmap:
+    #     radout = outf.rsplit(".", 1)[0] + ".rad"
+    #     f = open(radout, 'w')
+    #     srcrad = (srcsize/np.pi)**.5 * 180/np.pi * 2
+    #     f.write("void light sun 0 0 3 {} {} {}\n".format(*blended[1][-1]))
+    #     f.write("sun source solar 0 0 4 {} {} {} {}\n\n".format(*blended[1][0:3], srcrad))
+    #     f.write(f"void colorpict imgfunc\n7 red green blue {outf} fisheye.cal fish_u fish_v\n0 0\n")
+    #     f.write("imgfunc glow imgglow 0 0 4 1 1 1 0\n")
+    #     f.write("imgglow source sky 0 0 4 0 1 0 180\n")
+    #     io.carray2hdr(blended[0], outf, header)
+    # else:
+    #     io.carray2hdr(blended, outf, header)
 
 
 @main.command()
@@ -331,7 +386,7 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, **
     if r:
         rename.callback(imgs, **kwargs)
         imgs = ctx.obj['imgs']
-    infos = pool_call(pl.get_raw_frame, imgs, listonly=True, correct=True, expandarg=False)
+    infos = pool_call(pl.get_raw_frame, imgs, listonly=True, correct=True, expandarg=False, pbar=False)
     i = starti
     if ascend:
         expt = 1e9
@@ -383,13 +438,13 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, **
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def rename(ctx, imgs, out=None, copy=True, **kwargs):
     """rename raw files based on ISO_APERTURE_SHUTTER_CCT"""
-    infos = pool_call(pl.name_by_exif, imgs, expandarg=False, prefix=out)
+    infos = pool_call(pl.name_by_exif, imgs, expandarg=False, prefix=out, pbar=False)
     copied = []
     for orig, dest in zip(imgs, infos):
         dest2 = dest
         i = 0
         while dest2 in copied:
-            dest2 = dest2.rsplit(".", 1)
+            dest2 = dest.rsplit(".", 1)
             dest2 = "{}_{:02d}.{}".format(dest2[0], i, dest2[1])
             i += 1
         if copy:
@@ -437,6 +492,77 @@ def vignette(ctx, img, vfile=None, **kwargs):
         imgv = pl.apply_vignetting_correction(img, vg)
     io.array2hdr(imgv, None, header=[f"VIGNETTING_CORRECTION= {vfile}"] + header)
 
+
+@main.command()
+@click.argument("img", callback=hdr_data_load)
+@click.option("-inp", default='rad', help="input image primaries and wp. either 8 values, predefined aliases, or colorformat. Aliases:\n"
+                                          "\t rad: (0.640, 0.330, 0.290, 0.600, 0.150, 0.060, 0.3333, 0.3333)\n"
+                                          "\t srgb: (0.640,  0.330,  0.300,  0.600,  0.150,  0.060, 0.3127, 0.329)\ncolorformat:\n"
+                                          "\t xyz yxy")
+@click.option("-outp", default='srgb', help="output image primaries and wp. either 8 values or predefined aliases (see -inp)")
+@click.option("-xyzrgb", default=None, help="alternative input as xyz->rgb matrix (overrides -inp)")
+@click.option("-oxyzrgb", default=None, help="alternative output as xyz->rgb matrix (overrides -outp)")
+@click.option("-rgbrgb", default=None, help="alternative input as rgb->rgb matrix (overrides -inp and -outp)")
+@click.option("-vfile", callback=is_vignette_file, help="vignetting file, rows should be angle(degrees) factor(s) either one column"
+                                                        "for luminance or 3 for RGB, apply in destination RGB space after lens "
+                                                        " corrections. system stored files :\n" + "\n".join(vignetting_files))
+@clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
+def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=None, **kwargs):
+    """apply color primary conversion
+    """
+    newheader = []
+    if inp in ["xyz", "yxy"]:
+        inp2xyz = np.eye(3)
+    else:
+        inp2xyz, _, _ = pl.str_primaries_2_mtx(inp, xyzrgb)
+
+    if outp in ["xyz", "yxy"]:
+        rgb2rgb = inp2xyz
+    elif rgbrgb:
+        rgb2rgb = np.fromstring(rgbrgb).reshape(3, 3)
+        rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
+        newheader.append(f"RGB2RGB= {rgb2rgbs}")
+    else:
+        orgb2xyz, ps, ws = pl.str_primaries_2_mtx(outp, oxyzrgb)
+        rgb2rgb = np.linalg.inv(orgb2xyz) @ inp2xyz
+        ps = " ".join([f"{i:.04f}" for i in ps])
+        ws = " ".join([f"{i:.04f}" for i in ws])
+        ls = " ".join([f"{i:.08f}" for i in orgb2xyz[1]])
+        newheader += [f"TargetPrimaries= {ps}",
+                      f"TargetWhitePoint= {ws}",
+                      f"LuminanceRGB= {ls}"]
+        rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
+        newheader.append(f"RGB2RGB= {rgb2rgbs}")
+    if type(img) == str:
+        imgd, header = io.hdr2carray(img, header=True)
+        if inp == "yxy":
+            dy = imgd[0]
+            dx = imgd[0]*imgd[1]/imgd[2]
+            dz = (1-imgd[1]-imgd[2])*imgd[0]/imgd[2]
+            imgd = np.stack((dx, dy, dz))
+        rgb = np.einsum('ij,jkl->ikl', rgb2rgb, imgd)
+        if outp == "yxy":
+            dY = rgb[1]
+            sxyz = np.sum(rgb, axis=0)
+            dx = rgb[0]/sxyz
+            dy = rgb[1]/sxyz
+            rgb = np.stack((dY, dx, dy))
+        io.array2hdr(rgb, None, header=newheader + header + [imagetools.hdr2vm(img).header()])
+    else:
+        if inp == "yxy":
+            dy = img[:, 0]
+            dx = img[:, 0]*img[:, 1]/img[:, 2]
+            dz = (1-img[:,1]-img[:,2])*img[:,0]/img[:,2]
+            img = np.stack((dx,dy,dz)).T
+        rgb = np.einsum('ij,kj->ki', rgb2rgb, img)
+        if outp == "yxy":
+            dY = rgb[:, 1]
+            sxyz = np.sum(rgb, axis=1)
+            dx = rgb[:, 0]/sxyz
+            dy = rgb[:, 1]/sxyz
+            rgb = np.stack((dY, dx, dy)).T
+        for r in rgb:
+            print(*r)
 
 @main.result_callback()
 @click.pass_context

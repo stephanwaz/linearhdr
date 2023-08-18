@@ -8,7 +8,6 @@ IF(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 ENDIF(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 
 
-
 set(VERSION_MAJOR 0)
 set(VERSION_MINOR 1)
 
@@ -53,9 +52,6 @@ configure_file (
 add_subdirectory(src)
 
 configure_file(src/bin/extract_data.sh ${CMAKE_INSTALL_PREFIX}/bin/linearhdr_extract COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-
-
 
 
 
@@ -110,29 +106,16 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR}/
         ${LIBRAW_PATH}/
         )
 
-# -- Dedicated libraw target which does not support multi-threading ---------------------------------------
 
-if(RAW_LIB_VERSION_STRING VERSION_LESS 0.21)
-    set(libraw_LIB_SRCS ${LIBRAW_PATH}/internal/dcraw_common.cpp
-            ${LIBRAW_PATH}/internal/dcraw_fileio.cpp
-            ${LIBRAW_PATH}/internal/demosaic_packs.cpp
-            ${LIBRAW_PATH}/src/libraw_cxx.cpp
-            ${LIBRAW_PATH}/src/libraw_c_api.cpp
-            ${LIBRAW_PATH}/src/libraw_datastream.cpp
-            )
-else()
-    file(GLOB_RECURSE libraw_LIB_SRCS CONFIGURE_DEPENDS "${LIBRAW_PATH}/src/*.cpp")
+file(GLOB_RECURSE libraw_LIB_SRCS CONFIGURE_DEPENDS "${LIBRAW_PATH}/src/*.cpp")
 
-    # Exclude placeholder (stub) implementations
-    file(GLOB_RECURSE exclude_libraw_LIB_SRCS CONFIGURE_DEPENDS "${LIBRAW_PATH}/src/*_ph.cpp")
-    list(REMOVE_ITEM libraw_LIB_SRCS ${exclude_libraw_LIB_SRCS})
-endif()
+# Exclude placeholder (stub) implementations
+file(GLOB_RECURSE exclude_libraw_LIB_SRCS CONFIGURE_DEPENDS "${LIBRAW_PATH}/src/*_ph.cpp")
+list(REMOVE_ITEM libraw_LIB_SRCS ${exclude_libraw_LIB_SRCS})
 
 
-
+# linearhdr patch to dcraw_procees
 list(TRANSFORM libraw_LIB_SRCS REPLACE LibRaw/src/postprocessing/dcraw_process.cpp src/dcraw_process.cpp)
-
-message(STATUS  ${libraw_LIB_SRCS})
 
 add_library(raw ${libraw_LIB_SRCS})
 add_library(libraw::libraw ALIAS raw)
@@ -158,17 +141,12 @@ macro(LIBRAW_BUILD_SAMPLES)
         target_link_libraries(${_target} PUBLIC ${PTHREADS_LIBRARY})
     endif()
 
-    install(TARGETS ${_target}
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            )
+    install (TARGETS ${_target} DESTINATION bin)
+
 endmacro(LIBRAW_BUILD_SAMPLES)
 
 
 LIBRAW_BUILD_SAMPLES(rawconvert.cpp raw src)
-LIBRAW_BUILD_SAMPLES(raw-identify.cpp raw ${LIBRAW_PATH}/samples)
 
 
-install (TARGETS rawconvert DESTINATION bin)
-install (TARGETS raw-identify DESTINATION bin)
+

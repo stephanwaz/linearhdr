@@ -79,7 +79,8 @@ int linear_Response(pfs::Array2D *out[],
                    const float scale,
                    const float rgb_corr[3][3],
                    const float oor_high = 1e-30,
-                   const float oor_low = 1e30){
+                   const float oor_low = 1e30,
+                   const bool isbayer = false){
 
     // number of exposures
     int N = imgs[0]->size();
@@ -121,8 +122,13 @@ int linear_Response(pfs::Array2D *out[],
                 X[cc][i] = (*expo.yi)(j) * get_exposure_compensationX(expo) * scale;
                 w[cc][i] = get_weight((*expo.yi)(j));
                 saturated_exp[i] = (*expo.yi)(j) >= 1 - opt_saturation_offset || saturated_exp[i];
-                under_exp[i] = (*expo.yi)(j) <= opt_black_offset || under_exp[i];
+                // when isbayer, this value tracks not under-exposed
+                if (isbayer)
+                    under_exp[i] = (*expo.yi)(j) > opt_black_offset || under_exp[i];
+                else
+                    under_exp[i] = (*expo.yi)(j) <= opt_black_offset || under_exp[i];
             }
+            under_exp[i] = under_exp[i] != isbayer;
             if (saturated_exp[i] || under_exp[i]){
                 w[0][i] = 0;
                 w[1][i] = 0;
