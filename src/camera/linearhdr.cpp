@@ -78,8 +78,8 @@ int linear_Response(pfs::Array2D *out[],
                    float deghosting_value,
                    const float scale,
                    const float rgb_corr[3][3],
-                   const float oor_high = 1e-30,
-                   const float oor_low = 1e30,
+                   const float oor_high = -1,
+                   const float oor_low = -1,
                    const bool isbayer = false){
 
     // number of exposures
@@ -93,8 +93,8 @@ int linear_Response(pfs::Array2D *out[],
     int saturated_pixels = 0;
     int under_pixels = 0;
 
-    float mmax[3] = {oor_high, oor_high, oor_high};
-    float mmin[3] = {oor_low, oor_low, oor_low};
+    float mmax[3] = {1e-30, 1e-30, 1e-30};
+    float mmin[3] = {1e30, 1e30, 1e30};
 
     // For each pixel
     int skipped_deghost = 0;
@@ -200,6 +200,10 @@ int linear_Response(pfs::Array2D *out[],
         }
 
     }
+    if (oor_high >= 0)
+        mmax[0] = mmax[1] = mmax[2] = oor_high;
+    if (oor_low >= 0)
+        mmin[0] = mmin[1] = mmin[2] = oor_low;
     // Fill in nan values NOTE: removed normalization here
     float x,y,z;
     for (int j = 0; j < width * height; j++) {

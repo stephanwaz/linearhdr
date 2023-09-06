@@ -45,7 +45,7 @@ This will install three programs::
     linearhdr: the main c++ executable
     convertcolor: a utility compatible with pfstools
     linearhdr_extract: a shell script for processing image regions
-	convertraw: modified dcraw_emu with fewer options, modified defaults, and necessary changes to dcraw_process
+	rawconvert: modified dcraw_emu with fewer options, modified defaults, and necessary changes to dcraw_process
 	
 
 

@@ -134,7 +134,7 @@ void printHelp() {
                     "\t[--oor-low, -m <val>]: value to use for out of range low, default from data\n"
                     "\t[--oor-high, -x <val>]: value to use for out of range high, default from data\n"
                     "\t[--rgbs, -k '<val> <val> <val>']: rgb channel calibration default=1.0 1.0 1.0\n"
-                    "\t\toverriden by RGBcalibration in header line\n"
+                    "\t\toverriden by RGBcalibration in header line applies to output colorspace (after Camera2RGB in header line)\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
                     "\t\tuse linearhdr_calibrate to calculate\n"
                     "\t[--cull, -c]: throw away extra exposures that are not needed to keep output in range\n"
@@ -149,11 +149,10 @@ void printHelp() {
                     "\t<image2.ppm> <iso> <aperture> <exposure_time>\n\t...\n\n"
                     "list should be sorted by longest exposure time to shortest (only critical if --cull)\n"
                     "else, program expects a sequence of images (formatted as from pfsin on the stdin),\n"
-                    "use/see 'linearhdr_make_list' for an example.\n"
-                    "By default, linearhdr expects nominal aperture and shutter speed.\n"
-                    "If using pfsinme, note that nominal camera values are manipulated by dcraw\n"
-                    " (but with less accuracy) so make sure to use the --exact flag so shutter \n"
-                    "and aperture are not double corrected.\n\n");
+                    "use/see 'pylinearhdr makelist' for an example.\n"
+                    "By default, linearhdr expects exact aperture and shutter speed. so if you are making this list manually"
+                    " using nominal values, be sure to use --nominal to better estimate exposure. Note the is generally"
+                    " not very reliable as fast exposure times are often dramatically different from the default correction.\n\n");
 }
 
 void pfshdrraw(int argc, char *argv[]) {
@@ -172,8 +171,8 @@ void pfshdrraw(int argc, char *argv[]) {
     bool rgbe = true;
     bool nominal = false;
     bool isbayer = false;
-    float oor_high = 1e-30;
-    float oor_low = 1e30;
+    float oor_high = -1;
+    float oor_low = -1;
     float rgb_corr[3][3] = {{1.0, 0.0, 0.0},
                             {0.0, 1.0, 0.0},
                             {0.0, 0.0, 1.0}};

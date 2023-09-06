@@ -255,11 +255,8 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
     ppms = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, bayer=bayer,
                      shutterc=shutterc, listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False, pbar=False)
     if xyzcam is None:
-        normalize = True
         xyzcam = pl.get_xyz_cam(imgs[0])
-    else:
-        normalize = False
-    cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale, normalize=normalize)
+    cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale)
     for h in header:
         print(h, file=outf)
     pl.report(ppms, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
@@ -314,9 +311,9 @@ def run(ctx, imgs, **kwargs):
 @click.argument("imgn", callback=clk.is_file)
 @click.option("-outf", default="blended.hdr",
               help="output destination")
-@click.option("-roh", default=2.0,
+@click.option("-roh", default=0.0,
               help="rotation correction (degrees ccw) for horizontal band")
-@click.option("-rov", default=2.0,
+@click.option("-rov", default=0.0,
               help="rotation correction (degrees ccw) for vertical band")
 @click.option("-sfov", default=2.0,
               help="field of view around shaded source that is valid in imgn (in case of partial ND filter)")
@@ -332,8 +329,10 @@ def run(ctx, imgs, **kwargs):
               help="by default the imgh will be used in the UL and LR quadrants, flip=True will use imgh UR and LL")
 @click.option("-envmap",
               help="additionally save an hdr file suitable for use as an environment map, source information is in the header")
+@click.option("-check",
+              help="write out masks and other intermediate data (give as prefix)")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=2.0, rov=2.0, sfov=2.0, srcsize=6.7967e-05, bw=2.0, flip=False, envmap=None, sunloc=None,
+def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-05, bw=2.0, flip=False, envmap=None, sunloc=None, check=None,
                **kwargs):
     """merge set of three images with horizontal, vertical and no shadow band all images are assumed to be 180 degree
     angular fisheye.
@@ -349,8 +348,12 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=2.0, rov=2.0, sfov
     vdata, hv = io.hdr2carray(imgv, header=True)
     sdata, hs = io.hdr2carray(imgn, header=True)
     blended, skyonly, source = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw, flip=flip,
-                                             envmap=envmap, sunloc=sunloc)
-    header = [imagetools.hdr2vm(imgh).header()] + hh + hv + hs
+                                             envmap=envmap, sunloc=sunloc, check=check)
+    vm = imagetools.hdr2vm(imgh)
+    header = []
+    if vm is not None:
+        header = [vm.header()]
+    header += hh + hv + hs
     io.carray2hdr(blended, outf, header)
     if skyonly is not None:
         io.carray2hdr(skyonly, envmap, header)
@@ -547,7 +550,11 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
             dx = rgb[0]/sxyz
             dy = rgb[1]/sxyz
             rgb = np.stack((dY, dx, dy))
-        io.array2hdr(rgb, None, header=newheader + header + [imagetools.hdr2vm(img).header()])
+        try:
+            header += [imagetools.hdr2vm(img).header()]
+        except AttributeError:
+            pass
+        io.array2hdr(rgb, None, header=newheader + header)
     else:
         if inp == "yxy":
             dy = img[:, 0]

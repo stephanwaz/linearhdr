@@ -191,7 +191,7 @@ def mtx_pw(mtx):
     return primaries, whitepoint
 
 
-def cam_color_mtx(xyzcam, cs='rad', cscale=None, normalize=True):
+def cam_color_mtx(xyzcam, cs='rad', cscale=None):
     """calculate camRGB->RGB from camera xyz->cam (from raw-identify or custom) and rgb primaries/whitepoint """
     # xyz->camRGB from adobeDNG/libraw/dcraw
     if cs == 'raw':
@@ -205,10 +205,8 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None, normalize=True):
     rgb_xyz = pw_mtx(*cs)
 
     # rgb->camRGB
-    rgb_cam = np.asarray(xyzcam).reshape(3, 3) @ rgb_xyz
+    rgb_cam = rgb_xyz @ np.asarray(xyzcam).reshape(3, 3)
     # normalize
-    if normalize:
-        rgb_cam = rgb_cam / np.sum(rgb_cam, axis=1, keepdims=True)
     # invert to camRGB->rgb
     cam_rgb = np.linalg.inv(rgb_cam)
     cam_rgbs = " ".join([f"{i:.08f}" for i in cam_rgb.ravel()])
@@ -227,15 +225,12 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None, normalize=True):
 
 
 def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLevel", xyzcam=None, cscale=None, shutterc=None,
-                    white="LinearityUpperMargin", colorspace='rad', fo=None, scale=1.0, saturation=0.01, r=0.01):
+                    white="LinearityUpperMargin", colorspace='rad', fo=None, scale=1.0, saturation=0.01, r=0.01, bayer=False):
     if xyzcam is None:
-        normalize = True
         xyzcam = get_xyz_cam(img)
-    else:
-        normalize = False
-    cam_rgb, header = cam_color_mtx(xyzcam, colorspace, cscale=cscale, normalize=normalize)
+    cam_rgb, header = cam_color_mtx(xyzcam, colorspace, cscale=cscale)
     ppm = img + "_calibrate.ppm"
-    ppm, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white, ppm=ppm, fo=fo, shutterc=shutterc)
+    ppm, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white, ppm=ppm, fo=fo, shutterc=shutterc, bayer=bayer)
     iso = iso/scale
     txt = img + "_calibrate.txt"
     f = open(txt, 'w')

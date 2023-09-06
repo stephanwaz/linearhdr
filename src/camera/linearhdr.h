@@ -45,8 +45,8 @@ int linear_Response(pfs::Array2D *rgb_out[],
                     float deghosting_value,
                     const float scale,
                     const float rgb_corr[3][3],
-                    const float oor_high = 1e-30,
-                    const float oor_low = 1e30,
+                    const float oor_high = -1,
+                    const float oor_low = -1,
                     const bool isbayer = false);
 
 #endif /* #ifndef _robertson02_h_ */
