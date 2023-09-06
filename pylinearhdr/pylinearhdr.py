@@ -191,7 +191,7 @@ def mtx_pw(mtx):
     return primaries, whitepoint
 
 
-def cam_color_mtx(xyzcam, cs='rad', cscale=None):
+def cam_color_mtx(xyzcam, cs='rad', cscale=None, normalize=True):
     """calculate camRGB->RGB from camera xyz->cam (from raw-identify or custom) and rgb primaries/whitepoint """
     # xyz->camRGB from adobeDNG/libraw/dcraw
     if cs == 'raw':
@@ -205,8 +205,10 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None):
     rgb_xyz = pw_mtx(*cs)
 
     # rgb->camRGB
-    rgb_cam = rgb_xyz @ np.asarray(xyzcam).reshape(3, 3)
+    rgb_cam = np.asarray(xyzcam).reshape(3, 3) @ rgb_xyz
     # normalize
+    # if normalize:
+    #     rgb_cam = rgb_cam / np.sum(rgb_cam, axis=1, keepdims=True)
     # invert to camRGB->rgb
     cam_rgb = np.linalg.inv(rgb_cam)
     cam_rgbs = " ".join([f"{i:.08f}" for i in cam_rgb.ravel()])
@@ -222,6 +224,42 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None):
         ccal = " ".join([str(i) for i in cscale])
         header.append(f"# RGBcalibration= {ccal}")
     return cam_rgb, header
+
+# def cam_color_mtx(xyzcam, cs='rad', cscale=None):
+#     """calculate camRGB->RGB from camera xyz->cam (from raw-identify or custom) and rgb primaries/whitepoint """
+#     # xyz->camRGB from adobeDNG/libraw/dcraw
+#     if cs == 'raw':
+#         return np.eye(3), [f"# Camera2RGB= 1 0 0 0 1 0 0 0 1"]
+#     if cs == 'rad':
+#         cs = PREDEFINED_COLORS['rad']
+#     elif cs == 'srgb':
+#         cs = PREDEFINED_COLORS['srgb']
+#     else:
+#         cs = (np.asarray(cs[0]).ravel(), np.asarray(cs[1]).ravel())
+#     rgb_xyz = pw_mtx(*cs)
+#
+#     # rgb->camRGB
+#     rgb_cam = np.asarray(xyzcam).reshape(3, 3) @ rgb_xyz
+#     cam_rgb = np.linalg.inv(np.asarray(xyzcam).reshape(3, 3)) @ np.linalg.inv(rgb_xyz)
+#     print(xyzcam, rgb_xyz, cam_rgb, file=sys.stderr)
+#     rgb_cam = rgb_xyz @ np.asarray(xyzcam).reshape(3, 3)
+#     # normalize
+#     # rgb_cam = rgb_cam / np.sum(rgb_cam, axis=1, keepdims=True)
+#     # invert to camRGB->rgb
+#     cam_rgb = np.linalg.inv(rgb_cam)
+#     cam_rgbs = " ".join([f"{i:.08f}" for i in cam_rgb.ravel()])
+#
+#     ps = " ".join([f"{i:.04f}" for i in cs[0]])
+#     ws = " ".join([f"{i:.04f}" for i in cs[1]])
+#     ls = " ".join([f"{i:.08f}" for i in rgb_xyz[1]])
+#     header = [f"# Camera2RGB= {cam_rgbs}",
+#               f"# TargetPrimaries= {ps}",
+#               f"# TargetWhitePoint= {ws}",
+#               f"# LuminanceRGB= {ls}"]
+#     if cscale is not None:
+#         ccal = " ".join([str(i) for i in cscale])
+#         header.append(f"# RGBcalibration= {ccal}")
+#     return cam_rgb, header
 
 
 def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLevel", xyzcam=None, cscale=None, shutterc=None,

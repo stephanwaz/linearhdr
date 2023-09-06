@@ -521,6 +521,8 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
 
     if outp in ["xyz", "yxy"]:
         rgb2rgb = inp2xyz
+        rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
+        newheader.append(f"RGB2XYZ= {rgb2rgbs}")
     elif rgbrgb:
         rgb2rgb = np.fromstring(rgbrgb).reshape(3, 3)
         rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])

@@ -308,8 +308,13 @@ int main(int argc, char *argv[])
 
       if (identify){
           fprintf(stdout, "XYZ->CamRGB:");
-          for (int r = 0; r < P1.colors; r++)                                                                            \
-            fprintf(stdout, "\t%6.4f\t%6.4f\t%6.4f", C.cam_xyz[r][0], C.cam_xyz[r][1], C.cam_xyz[r][2]);
+          for (int r = 0; r < P1.colors; r++)
+            // adobe dng values seem to assume double green (bayer), no need to divide green channel by 2 for it to work
+              // on interpolated values
+              if (r == 1)
+                  fprintf(stdout, "\t%6.4f\t%6.4f\t%6.4f", 0.5 * C.cam_xyz[r][0], 0.5 * C.cam_xyz[r][1], 0.5 * C.cam_xyz[r][2]);
+              else
+                  fprintf(stdout, "\t%6.4f\t%6.4f\t%6.4f", C.cam_xyz[r][0], C.cam_xyz[r][1], C.cam_xyz[r][2]);
           fprintf(stdout, "\nD65_multips:");
           for (int c = 0; c < P1.colors; c++)
               fprintf(stdout, "\t%f", C.pre_mul[c]);
