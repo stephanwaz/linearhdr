@@ -15,14 +15,14 @@ PREDEFINED_COLORS = dict(rad=((0.640, 0.330, 0.290, 0.600, 0.150, 0.060), (0.333
 
 
 def camera_raw_values(img):
-    ppm = img + "_raw.ppm"
+    tiff = img + "_raw.tiff"
     hdr = img + "_raw.hdr"
-    Popen(shlex.split(f"rawconvert -disinterp -Z {ppm} {img}")).communicate()
-    f = Popen(shlex.split(f"pfsin {ppm}"), stdout=PIPE)
+    Popen(shlex.split(f"rawconvert -disinterp -Z {tiff} {img}")).communicate()
+    f = Popen(shlex.split(f"pfsin {tiff}"), stdout=PIPE)
     Popen(shlex.split(f"pfsout {hdr}"), stdin=f.stdout, stderr=PIPE).communicate()
     imrgb = io.hdr2carray(hdr)
     imar = np.max(imrgb, axis=0)
-    os.remove(ppm)
+    os.remove(tiff)
     os.remove(hdr)
     return imar
 
@@ -139,15 +139,15 @@ def process_dcraw_opt(val, img, callexif=True, avg=False):
 
 
 def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None, bad_pixels=None, bayer=False,
-                  black="PerChannelBlackLevel", white="LinearityUpperMargin", fo=None, shutterc=None, ppm=None):
+                  black="PerChannelBlackLevel", white="LinearityUpperMargin", fo=None, shutterc=None, tiff=None):
     correct = correct or fo or shutterc
     black = process_dcraw_opt(black, img, avg=True)
     white = process_dcraw_opt(white, img, avg=True)
-    if ppm is None:
-        ppm = img + ".ppm"
+    if tiff is None:
+        tiff = img + ".tiff"
     if listonly:
-        ppm = img
-    elif overwrite or not os.path.isfile(ppm):
+        tiff = img
+    elif overwrite or not os.path.isfile(tiff):
         cs = ""
         if crop is not None:
             cs = "-B {} {} {} {}".format(*crop)
@@ -155,9 +155,9 @@ def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None,
             cs += f" -P {bad_pixels}"
         if bayer:
             cs += " -disinterp"
-        Popen(shlex.split(f"rawconvert {cs} -Z {ppm} -k {black} -S {white} {img}")).communicate()
+        Popen(shlex.split(f"rawconvert {cs} -Z {tiff} -k {black} -S {white} {img}")).communicate()
     rawinfo = info_from_exif(img, correct, fo=fo, shutterc=shutterc)
-    return ppm, *rawinfo
+    return tiff, *rawinfo
 
 
 def process_colorspace_option(colorspace):
@@ -267,46 +267,46 @@ def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLev
     if xyzcam is None:
         xyzcam = get_xyz_cam(img)
     cam_rgb, header = cam_color_mtx(xyzcam, colorspace, cscale=cscale)
-    ppm = img + "_calibrate.ppm"
-    ppm, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white, ppm=ppm, fo=fo, shutterc=shutterc, bayer=bayer)
+    tiff = img + "_calibrate.tiff"
+    tiff, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white, tiff=tiff, fo=fo, shutterc=shutterc, bayer=bayer)
     iso = iso/scale
     txt = img + "_calibrate.txt"
     f = open(txt, 'w')
     for h in header:
         print(h, file=f)
-    print(f"{ppm} {iso} {ap:.03f} {1/sh:.08f}", file=f)
+    print(f"{tiff} {iso} {ap:.03f} {1/sh:.08f}", file=f)
     f.close()
     opts += f" -o {saturation} -r {r}"
     f = Popen(shlex.split(f"linearhdr {opts} --exact --tsv {txt}"), stdout=PIPE)
     vals = Popen(shlex.split("total -m"), stdin=f.stdout, stdout=PIPE).communicate()[0].split()
     vals = [float(i) for i in vals] + [float(vals[-2]) + float(vals[-1])]
-    os.remove(ppm)
+    os.remove(tiff)
     os.remove(txt)
-    return ppm, sh, ap, iso, vals
+    return tiff, sh, ap, iso, vals
 
 
-def report(ppms, s=False, l=False, scale=1, sat_w=0.99, sat_b=.01, outf=None):
+def report(tiffs, s=False, l=False, scale=1, sat_w=0.99, sat_b=.01, outf=None):
     if outf is None:
         outf = sys.stdout
     if l:
         print(f"Name Date ISO aperture etime shutter luminance range", file=sys.stderr)
     else:
-        ppms = sorted(ppms, key=lambda x: x[1])
+        tiffs = sorted(tiffs, key=lambda x: x[1])
         if not s:
-            capdate = sorted([ppms[0][-1].strip(), ppms[-1][-1].strip()])
+            capdate = sorted([tiffs[0][-1].strip(), tiffs[-1][-1].strip()])
             stop = capdate[-1].rsplit(" ", 1)[1]
             print(f"# CAPDATE= {capdate[0]}-{stop}", file=outf)
-    for ppm, sh, ap, iso, time in ppms:
+    for tiff, sh, ap, iso, time in tiffs:
         if l:
             fmax = scale * 100 * ap * ap * sh / iso
-            print(f"{ppm} {time} {iso} {ap:.03f} {1/sh:.08f} {sh:.02f} = {sat_b*fmax:.02f} to {sat_w*fmax:.02f}", file=sys.stderr)
+            print(f"{tiff} {time} {iso} {ap:.03f} {1/sh:.08f} {sh:.02f} = {sat_b*fmax:.02f} to {sat_w*fmax:.02f}", file=sys.stderr)
         elif s:
-            print(f"pfsin {ppm} | pfstag --set 'ISO={iso/scale}' --set 'aperture={ap:.03f}' --set 'exposure_time={1/sh:.08f}'", file=outf)
+            print(f"pfsin {tiff} | pfstag --set 'ISO={iso/scale}' --set 'aperture={ap:.03f}' --set 'exposure_time={1/sh:.08f}'", file=outf)
         else:
-            print(f"{ppm} {iso/scale} {ap:.03f} {1/sh:.08f}", file=outf)
+            print(f"{tiff} {iso/scale} {ap:.03f} {1/sh:.08f}", file=outf)
 
 
-def report_calibrate(ppms, sort='shutter', target=None, header=True):
+def report_calibrate(tiffs, sort='shutter', target=None, header=True):
     avg = 0
     div = 0
     minv = 1e9
@@ -318,12 +318,12 @@ def report_calibrate(ppms, sort='shutter', target=None, header=True):
             print(f"image\tiso\taperture\texposure_time\tsat_red\tsat_green\tsat_blue\tred\tgreen\tblue\tlum\tfrac_above\tfrac_below\tfrac_oor\ttarget:{target}")
         else:
             print("image\tiso\taperture\texposure_time\tsat_red\tsat_green\tsat_blue\tred\tgreen\tblue\tlum\tfrac_above\tfrac_below\tfrac_oor")
-    ppms = sorted(ppms, key=lambda x: x[1])
-    for ppm, sh, ap, iso, rgb in sorted(ppms, key=lambda x: x[si]):
+    tiffs = sorted(tiffs, key=lambda x: x[1])
+    for tiff, sh, ap, iso, rgb in sorted(tiffs, key=lambda x: x[si]):
         if target:
-            print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04g}" for i in rgb]) + f"\t{rgb[6]/target:.04g}")
+            print(f"{tiff}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04g}" for i in rgb]) + f"\t{rgb[6]/target:.04g}")
         else:
-            print(f"{ppm}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04g}" for i in rgb]))
+            print(f"{tiff}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04g}" for i in rgb]))
         if rgb[-2] == 0 and rgb[-1] == 0:
             minv = min(minv, rgb[-4])
             maxv = max(maxv, rgb[-4])

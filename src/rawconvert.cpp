@@ -68,7 +68,8 @@ void usage(const char *prog)
          "-k <num>  Set the darkness level\n"
          "-S <num>  Set the saturation level\n"
          "-n <num>  Set threshold for wavelet denoising\n"
-         "-T        Write TIFF instead of PPM\n"
+         "-T        Write TIFF instead of PPM (default)\n"
+         "-p        Write PPM instead of TIFF\n"
          "-G        Use green_matching() filter\n"
          "-B <x y w h> use cropbox\n"
          "-Z <suf>  Output filename generation rules\n"
@@ -204,6 +205,7 @@ int main(int argc, char *argv[])
 #define OUT RawProcessor.imgdata.params
   OUT.user_mul[1] = OUT.user_mul[3] = 1;
   OUT.user_mul[0] = OUT.user_mul[2] = 1;
+  OUT.output_tiff = 1;
   argv[argc] = (char *)"";
   for (arg = 1; (((opm = argv[arg][0]) - 2) | 2) == '+';)
   {
@@ -251,6 +253,9 @@ int main(int argc, char *argv[])
     case 'T':
       OUT.output_tiff = 1;
       break;
+    case 'p':
+        OUT.output_tiff = 0;
+        break;
     case 'G':
         OUT.green_matching = 1;
         break;

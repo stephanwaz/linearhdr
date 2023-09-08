@@ -1,2 +1,31 @@
 add_subdirectory (pfs)
-add_subdirectory (camera)
+
+
+include_directories ("${PROJECT_BINARY_DIR}/"
+        "${PROJECT_SOURCE_DIR}/src/pfs" "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/src/fileformat")
+
+link_directories("${PROJECT_SOURCE_DIR}/src/pfs")
+
+
+include_directories(${TIFF_INCLUDE_DIR})
+
+#
+#
+#if( NETPBM_FOUND )
+#    add_executable(linearhdr linearhdr_main.cpp responses.cpp linearhdr.cpp nrutil.cpp ../fileformat/ppmio.cpp ../fileformat/rgbeio.cpp "${GETOPT_OBJECT}")
+#    target_link_libraries(linearhdr pfs ${NETPBM_LIBRARIES})
+#else()
+#    add_executable(linearhdr linearhdr_main.cpp responses.cpp linearhdr.cpp nrutil.cpp ../fileformat/rgbeio.cpp "${GETOPT_OBJECT}")
+#    target_link_libraries(linearhdr pfs)
+#endif()
+
+add_executable(linearhdr linearhdr_main.cpp linearhdr.cpp camera/nrutil.cpp fileformat/rgbeio.cpp fileformat/hdrtiffio.cpp "${GETOPT_OBJECT}")
+target_link_libraries(linearhdr pfs ${TIFF_LIBRARY})
+
+add_executable(convertcolor convertcolor.cpp fileformat/rgbeio.cpp "${GETOPT_OBJECT}")
+target_link_libraries(convertcolor pfs)
+
+message(STATUS ${CMAKE_INSTALL_PREFIX})
+
+install (TARGETS linearhdr DESTINATION bin)
+install (TARGETS convertcolor DESTINATION bin)

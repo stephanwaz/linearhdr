@@ -35,7 +35,33 @@
 #ifndef _robertson02_h_
 #define _robertson02_h_
 
-#include <responses.h>
+#include <stdio.h>
+
+#include <vector>
+#include <array2d.h>
+
+/**
+ * @brief Container for images taken with different exposures
+ */
+class Exposure
+{
+public:
+    float ti;			// exposure value (eg time) - including iso and apperture
+    float exposure_time;          // exposure time
+    float iso;                    // sensor gain iso value
+    float aperture;
+    pfs::Array2D* yi;		// exposed pixel value (camera output)
+
+    // to be able to sort exposures using stl
+    static bool msort( Exposure const & a, Exposure const & b)
+    { return a.ti < b.ti; }
+};
+
+
+/**
+ * @brief Container for a list of exposures
+ */
+typedef std::vector<Exposure> ExposureList;
 
 
 int linear_Response(pfs::Array2D *rgb_out[],

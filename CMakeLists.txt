@@ -29,19 +29,8 @@ else( NOT HAS_GETOPT )
     set( GETOPT_OBJECT )
 endif( NOT HAS_GETOPT )
 
-OPTION(WITH_NetPBM "Use NetPBM library" ON)
 
-if( WITH_NetPBM )
-#    set(CMAKE_FIND_DEBUG_MODE TRUE)
-    find_package(NETPBM)
-#    set(CMAKE_FIND_DEBUG_MODE FALSE)
-    if( NOT NETPBM_FOUND )
-        MESSAGE( STATUS "NetPBM not found." )
-    endif( NOT NETPBM_FOUND )
-
-else( WITH_NetPBM )
-    set( NETPBM_FOUND OFF )
-endif( WITH_NetPBM )
+find_package(TIFF)
 
 set(PKG_DATADIR "${CMAKE_INSTALL_PREFIX}/share/pfstools")
 configure_file (

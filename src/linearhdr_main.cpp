@@ -47,15 +47,11 @@
 
 #include <pfs.h>
 
-#include <responses.h>
 #include <linearhdr.h>
 #include <fstream>
 #include <sstream>
 #include <rgbeio.h>
-
-#ifdef NETPBM_FOUND
-#include <ppmio.h>
-#endif
+#include <hdrtiffio.h>
 
 using namespace std;
 
@@ -145,8 +141,8 @@ void printHelp() {
                     "\t[--nominal, -n]: input camera values interpreted as nominal (default=False)\n"
                     "\t[--verbose, -v]\n\t[--help]\n\n"
                     "If exposure_list is given, images are read from file formatted as:\n"
-                    "\t<image1.ppm> <iso> <aperture> <exposure_time>\n"
-                    "\t<image2.ppm> <iso> <aperture> <exposure_time>\n\t...\n\n"
+                    "\t<image1.tiff> <iso> <aperture> <exposure_time>\n"
+                    "\t<image2.tiff> <iso> <aperture> <exposure_time>\n\t...\n\n"
                     "list should be sorted by longest exposure time to shortest (only critical if --cull)\n"
                     "else, program expects a sequence of images (formatted as from pfsin on the stdin),\n"
                     "use/see 'pylinearhdr makelist' for an example.\n"
@@ -338,16 +334,13 @@ void pfshdrraw(int argc, char *argv[]) {
 
                 FILE *fh = fopen( framefile.c_str(), "rb");
                 pfs::FrameFile ff = pfs::FrameFile( fh, framefile.c_str());
-                #ifdef NETPBM_FOUND
-                PPMReader reader( PROG_NAME, ff.fh );
+                HDRTiffReader reader( ff.fileName);
                 iframe = pfsio.createFrame( reader.getWidth(), reader.getHeight() );
                 pfs::Channel *X, *Y, *Z;
                 iframe->createXYZChannels( X, Y, Z );
 
                 reader.readImage( X, Y, Z );
-                #else
-                throw pfs::Exception("linearhdr compiled without ppm support use pfsin to load files");
-                #endif
+
 
             } else
                 break; //no more lines

@@ -207,9 +207,9 @@ def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.0
         colorspace = 'raw'
         hdropts += " -B"
     colorspace = pl.process_colorspace_option(colorspace)
-    ppms = pool_call(pl.calibrate_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black, pbar=False, shutterc=shutterc,
+    tiffs = pool_call(pl.calibrate_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black, pbar=False, shutterc=shutterc,
                      white=white, colorspace=colorspace, fo=fo, scale=scale * 10**nd, cscale=cscale, saturation=saturation, r=range, xyzcam=xyzcam, bayer=bayer)
-    pl.report_calibrate(ppms, sort=sort, target=target, header=header)
+    pl.report_calibrate(tiffs, sort=sort, target=target, header=header)
 
 
 make_list_opts = [
@@ -229,7 +229,7 @@ make_list_opts = [
                    help="skip execution and just print metadata"),
      click.option("-hdropts", default="", help="additional options to linearhdr (with callhdr, overrides -r -s)"),
      click.option("-crop", callback=clk.split_int,
-                   help="crop ppm (left upper W H)"),
+                   help="crop tiff (left upper W H)"),
 ]
 
 
@@ -252,14 +252,14 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         outf = open(outfn, 'w')
         if not correct:
             hdropts += " --nominal"
-    ppms = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, bayer=bayer,
+    tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, bayer=bayer,
                      shutterc=shutterc, listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False, pbar=False)
     if xyzcam is None:
         xyzcam = pl.get_xyz_cam(imgs[0])
     cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale)
     for h in header:
         print(h, file=outf)
-    pl.report(ppms, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
+    pl.report(tiffs, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
 
     command = [f"linearhdr -r {range} -o {saturation} {hdropts} {outfn}"]
     if fisheye:
@@ -277,8 +277,8 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         outf.close()
         pipeline(command, outfile=sys.stdout)
         if clean:
-            for ppm in ppms:
-                os.remove(ppm[0])
+            for tiff in tiffs:
+                os.remove(tiff[0])
         clk.tmp_clean(ctx)
     else:
         print(" | ".join(command), file=sys.stderr)
@@ -295,7 +295,7 @@ def makelist(ctx, imgs, **kwargs):
 
 @main.command()
 @clk.shared_decs(make_list_opts + shared_run_opts)
-@click.option("--clean/--no-clean", default=True, help="delete ppm files after linearhdr")
+@click.option("--clean/--no-clean", default=True, help="delete tiff files after linearhdr")
 @click.option("-vfile", callback=is_vignette_file, help="vignetting file, rows should be angle(degrees) factor(s) either one column"
                                                         "for luminance or 3 for RGB, apply in destination RGB space after lens "
                                                         " corrections. system stored files :\n" + "\n".join(vignetting_files))

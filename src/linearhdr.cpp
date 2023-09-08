@@ -40,9 +40,7 @@
 #include <vector>
 
 #include <cmath>
-
-#include <responses.h>
-
+#include <linearhdr.h>
 
 using namespace std;
 
@@ -50,11 +48,6 @@ using namespace std;
 #define PROG_NAME "linearhdr"
 
 extern bool verbose; /* verbose should be declared for each standalone code */
-
-inline float max3(float a[3]) {
-    float max = (a[0] > a[1]) ? a[0] : a[1];
-    return (a[2] > max) ? a[2] : max;
-}
 
 inline float max(float a, float b) {
     return (a > b) ? a : b;
@@ -78,9 +71,9 @@ int linear_Response(pfs::Array2D *out[],
                    float deghosting_value,
                    const float scale,
                    const float rgb_corr[3][3],
-                   const float oor_high = -1,
-                   const float oor_low = -1,
-                   const bool isbayer = false){
+                   const float oor_high,
+                   const float oor_low,
+                   const bool isbayer){
 
     // number of exposures
     int N = imgs[0]->size();
