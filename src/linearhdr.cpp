@@ -8,7 +8,7 @@
  * @brief Robertson02 algorithm for automatic self-calibration.
  *
  * 
- * This file is a part of PFS CALIBRATION package.
+ * This file is derived from a part of PFS CALIBRATION package.
  * ---------------------------------------------------------------------- 
  * Copyright (C) 2004 Grzegorz Krawczyk
  * 
@@ -31,6 +31,24 @@
  *         Ivo Ihrke        , <ihrke@mmci.uni-saarland.de>
  *
  * $Id: robertson02.cpp,v 1.11 2011/02/25 13:45:14 ihrke Exp $
+ */
+
+/*
+ * Copyright (c) 2023 Stephen Wasilewski, EPFL
+ *  =======================================================================
+ *  This program is free software: you can redistribute it and/or
+ *  modify it under the terms of theGNU Lesser General Public License
+ *  as published by the Free Software Foundation, either version 3 of
+ *  the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ *  Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program. If not, see <https://www.gnu.org/licenses/>.
+ *  =======================================================================
  */
 
 
@@ -73,8 +91,10 @@ int linear_Response(pfs::Array2D *out[],
                    const float rgb_corr[3][3],
                    const float oor_high,
                    const float oor_low,
-                   const bool isbayer){
+                   bool isbayer,
+                   const bool demosaic){
 
+    isbayer = isbayer or demosaic;
     // number of exposures
     int N = imgs[0]->size();
 
@@ -206,6 +226,13 @@ int linear_Response(pfs::Array2D *out[],
             else if ((*out[cc])(j) == -2)
                 (*out[cc])(j) = mmin[cc];
         }
+    }
+    // demosaic after merge
+    if (demosaic){
+        dht_interpolate(out[0], out[1], out[2]);
+    }
+    // apply color transformation
+    for (int j = 0; j < width * height; j++) {
         x = (*out[0])(j);
         y = (*out[1])(j);
         z = (*out[2])(j);
@@ -215,7 +242,6 @@ int linear_Response(pfs::Array2D *out[],
         (*out[0])(j) = max((*out[0])(j), 0);
         (*out[1])(j) = max((*out[1])(j), 0);
         (*out[2])(j) = max((*out[2])(j), 0);
-
     }
 
     VERBOSE_STR << "Maximum Value: " << mmax[0] << ", " << mmax[1] << ", " << mmax[2] << std::endl;

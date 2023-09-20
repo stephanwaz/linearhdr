@@ -1,3 +1,20 @@
+# Copyright (c) 2023 Stephen Wasilewski, EPFL
+# =======================================================================
+# This program is free software: you can redistribute it and/or
+# modify it under the terms of theGNU Lesser General Public License
+# as published by the Free Software Foundation, either version 3 of
+# the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+# =======================================================================
+
+
 import os
 import shutil
 import sys
@@ -167,9 +184,9 @@ shared_run_opts = [
                       " corrections for F11 and F22 (would be 11.31 and 22.63)"),
     click.option("-shutterc", "-sc", type=float,
                  help="if given, sets --correct to True. for correcting shutter speed. takes a single value 'A' "
-                      "interpreted as: shutter=s*exp(A*s),  where s is the corrected (true power of 2) shutter speed. "
+                      "interpreted as: shutter=x*exp(A*x),  where x is the corrected (true power of 2) shutter speed. "
                       "this curve can be derived from a  sequence of hdr images using single files taken with "
-                      "different shutter speeds. fit the function y=exp(A*s) where y = lum_s0/lum_st and lum_s0 is "
+                      "different shutter speeds. fit the function y=exp(A*x) where y = lum_s0/lum_st and lum_s0 is "
                       "the luminance of the  target at the longest exposure time. this can be done with an "
                       "exponential trendline in excel (make sure set intercept=1), or with "
                       "scipy.optimize.curve_fit(lambda t,a: np.exp(a*t),  x,  y, p0=(-1e-8,))"),
@@ -179,7 +196,8 @@ shared_run_opts = [
     click.option("-saturation", "-saturation-offset", "-s", default=0.01, help="saturation offset, if white is not LinearityUpperMargin, this must be changed"),
     click.option("-range", "-r", default=0.01, help="lower range of single raw exposure"),
     click.option("--verbose/--no-verbose", default=False, help="passed to linearhdr"),
-    click.option("--bayer/--no-bayer", default=False, help="do not interpolate raw channels. forces -colorspace to 'raw'")
+    click.option("--interpfirst/--interpsecond", default=True, help="interpolate with raw convert (uses linear) or interpolate after merge (uses DHT)"),
+    click.option("--bayer/--no-bayer", default=False, help="do not interpolate raw channels. forces -colorspace to 'raw' and ignores --interpfirst")
 ]
 
 
@@ -195,7 +213,7 @@ shared_run_opts = [
 def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.01, range=0.01, hdropts="",
               black="AverageBlackLevel", white="AverageBlackLevel", cscale=None, shutterc=None,
               colorspace='rad', fo=None, sort='shutter', target=None, header=True, xyzcam=None, verbose=False,
-              bayer=False, **kwargs):
+              bayer=False, interpfirst=True, **kwargs):
     """calibration routine, see README.rst
 
     imgs: list of images
@@ -206,9 +224,12 @@ def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.0
     if bayer:
         colorspace = 'raw'
         hdropts += " -B"
+    elif not interpfirst:
+        hdropts += " -D"
     colorspace = pl.process_colorspace_option(colorspace)
     tiffs = pool_call(pl.calibrate_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black, pbar=False, shutterc=shutterc,
-                     white=white, colorspace=colorspace, fo=fo, scale=scale * 10**nd, cscale=cscale, saturation=saturation, r=range, xyzcam=xyzcam, bayer=bayer)
+                     white=white, colorspace=colorspace, fo=fo, scale=scale * 10**nd, cscale=cscale, saturation=saturation, r=range, xyzcam=xyzcam,
+                      bayer=bayer or (not interpfirst))
     pl.report_calibrate(tiffs, sort=sort, target=target, header=header)
 
 
@@ -235,13 +256,16 @@ make_list_opts = [
 
 def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
                  crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
-                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, bayer=False, **kwargs):
+                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, bayer=False,
+                 interpfirst=True, **kwargs):
     """make list routine, use to generate input to linearhdr"""
     if verbose:
         hdropts += " --verbose"
     if bayer:
         colorspace = 'raw'
         hdropts += " -B"
+    elif not interpfirst:
+        hdropts += " -D"
     outf = sys.stdout
     outfn = "<makelist.txt>"
     if listonly:
@@ -252,7 +276,7 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         outf = open(outfn, 'w')
         if not correct:
             hdropts += " --nominal"
-    tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, bayer=bayer,
+    tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, bayer=bayer or (not interpfirst),
                      shutterc=shutterc, listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False, pbar=False)
     if xyzcam is None:
         xyzcam = pl.get_xyz_cam(imgs[0])
@@ -438,10 +462,13 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, **
 @click.argument("imgs", callback=clk.are_files)
 @click.option("-out", help="base name, becomes: img_XXX, if None, appends info to current name")
 @click.option("--copy/--move", default=True, help="copy or move")
+@click.option("--aperture/--no-aperture", default=True, help="name by aperture")
+@click.option("--iso/--no-iso", default=False, help="name by iso")
+@click.option("--shutter/--no-shutter", default=True, help="name by shutter")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def rename(ctx, imgs, out=None, copy=True, **kwargs):
+def rename(ctx, imgs, out=None, copy=True, aperture=True, shutter=True, iso=False, **kwargs):
     """rename raw files based on ISO_APERTURE_SHUTTER_CCT"""
-    infos = pool_call(pl.name_by_exif, imgs, expandarg=False, prefix=out, pbar=False)
+    infos = pool_call(pl.name_by_exif, imgs, expandarg=False, prefix=out, pbar=False, aperture=aperture, shutter=shutter, iso=iso)
     copied = []
     for orig, dest in zip(imgs, infos):
         dest2 = dest

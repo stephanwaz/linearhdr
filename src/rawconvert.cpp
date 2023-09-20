@@ -17,9 +17,29 @@ it under the terms of the one of two licenses as you choose:
 
 2. COMMON DEVELOPMENT AND DISTRIBUTION LICENSE (CDDL) Version 1.0
    (See file LICENSE.CDDL provided in LibRaw distribution archive for details).
+*/
 
-
+/*
+ * Copyright (c) 2023 Stephen Wasilewski, EPFL
+ * primary modification is the elimation of some options and a change in
+ * the default arguments targetting hdr generation from raw pixel values
+ *  =======================================================================
+ *  This program is free software: you can redistribute it and/or
+ *  modify it under the terms of theGNU Lesser General Public License
+ *  as published by the Free Software Foundation, either version 3 of
+ *  the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ *  Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program. If not, see <https://www.gnu.org/licenses/>.
+ *  =======================================================================
  */
+
+
 #ifdef _MSC_VER
 // suppress sprintf-related warning. sprintf() is permitted in sample code
 #define _CRT_SECURE_NO_WARNINGS
@@ -79,6 +99,10 @@ void usage(const char *prog)
          "          - => output to stdout\n"
          "          filename.suf => output to filename.suf\n"
          "-disinterp Do not run interpolation step\n"
+         "-h         Half-size color image\n"
+         "-q N      Set the interpolation quality:\n"
+         "          0 - linear, 1 - VNG, 2 - PPG, 3 - AHD, 4 - DCB\n"
+         "          11 - DHT, 12 - AAHD\n"
          "-identify skip all processing and simply print XYZ->CamRGB matrix\n"
   );
   exit(1);
@@ -240,6 +264,9 @@ int main(int argc, char *argv[])
       for (c = 0; c < 4; c++)
         OUT.user_mul[c] = (float)atof(argv[arg++]);
       break;
+    case 'q':
+        OUT.user_qual = atoi(argv[arg++]);
+        break;
     case 'k':
       OUT.user_black = atoi(argv[arg++]);
       break;
@@ -258,6 +285,9 @@ int main(int argc, char *argv[])
         break;
     case 'G':
         OUT.green_matching = 1;
+        break;
+    case 'h':
+        OUT.half_size = 1;
         break;
     case 'Z':
       outext = strdup(argv[arg++]);

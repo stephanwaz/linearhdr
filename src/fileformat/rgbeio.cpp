@@ -23,6 +23,23 @@
  * @author Grzegorz Krawczyk, <krawczyk@mpi-sb.mpg.de>
  *
  * $Id: rgbeio.cpp,v 1.13 2014/06/17 21:57:09 rafm Exp $
+ *
+ * Modifications to this file made for inclusion in the Linearhdr package
+ * Copyright (c) 2023 Stephen Wasilewski, EPFL
+ *  =======================================================================
+ *  This program is free software: you can redistribute it and/or
+ *  modify it under the terms of theGNU Lesser General Public License
+ *  as published by the Free Software Foundation, either version 3 of
+ *  the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ *  Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program. If not, see <https://www.gnu.org/licenses/>.
+ *  =======================================================================
  */
 
 #include "config.h"
@@ -44,6 +61,7 @@ using namespace std;
 void readRadianceHeader( FILE *file, int &width, int &height, float &exposure );
 void readRadiance( FILE *file, int width, int height, float exposure,
 		   pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z );
+// Linearhdr edit: add header information to output file
 void writeRadiance(FILE *file, pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z, bool radiance_compatibility = false, std::string comment = "" );
 
 
@@ -68,7 +86,7 @@ RGBEReader::~RGBEReader()
 {
   //TODO: empty
 }
-
+// Linearhdr edit: add header information to output file
 void RGBEWriter::writeImage( pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z, std::string comment )
 {
 	writeRadiance(fh, X, Y, Z, radiance_compatibility, comment);
@@ -387,7 +405,7 @@ int RLEWrite( FILE* file, Trgbe* scanline, int size )
 }
 
 
-
+// Linearhdr edit: add header information to output file
 void writeRadiance(FILE *file, pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z, bool radiance_compatibility, std::string comment)
 {
   int width = X->getCols();
@@ -403,6 +421,7 @@ void writeRadiance(FILE *file, pfs::Array2D *X, pfs::Array2D *Y, pfs::Array2D *Z
 
   // header information
   fprintf(file, "#?RADIANCE\n");	// file format specifier
+    // Linearhdr edit: add header information to output file
   fprintf(file, "%s", comment.c_str());
 
 //    if( exposure_isset )

@@ -9,7 +9,7 @@
  * of differently exposed images supplied in PFS stream
  *
  * 
- * This file is a part of PFS CALIBRATION package.
+ * This file is derived from a part of PFS CALIBRATION package.
  * ---------------------------------------------------------------------- 
  * Copyright (C) 2004 Grzegorz Krawczyk
  * 
@@ -32,6 +32,24 @@
  * @author Ivo Ihrke, <ihrke@mmci.uni-saarland.de>
  *
  * $Id: pfshdrcalibrate.cpp,v 1.16 2011/02/24 17:35:59 ihrke Exp $
+ */
+
+/*
+ * Copyright (c) 2023 Stephen Wasilewski, EPFL
+ *  =======================================================================
+ *  This program is free software: you can redistribute it and/or
+ *  modify it under the terms of theGNU Lesser General Public License
+ *  as published by the Free Software Foundation, either version 3 of
+ *  the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ *  Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program. If not, see <https://www.gnu.org/licenses/>.
+ *  =======================================================================
  */
 
 #include <config.h>
@@ -136,6 +154,7 @@ void printHelp() {
                     "\t[--cull, -c]: throw away extra exposures that are not needed to keep output in range\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
                     "\t[--bayer, -B]: expect mosaic input (rawconvert --disinterp) ignores color correction in exposure_list header\n"
+                    "\t[--debayer, -D]: interpolate hdr output, overrides --bayer, but expects same input (rawconvert --disinterp)\n"
                     "\t[--pfs, -P]: output pfs stream\n"
                     "\t[--exact, -e]: input camera values interpreted as exact (default=True)\n"
                     "\t[--nominal, -n]: input camera values interpreted as nominal (default=False)\n"
@@ -167,6 +186,7 @@ void pfshdrraw(int argc, char *argv[]) {
     bool rgbe = true;
     bool nominal = false;
     bool isbayer = false;
+    bool demosaic = false;
     float oor_high = -1;
     float oor_low = -1;
     float rgb_corr[3][3] = {{1.0, 0.0, 0.0},
@@ -186,6 +206,7 @@ void pfshdrraw(int argc, char *argv[]) {
             {"pfs",    no_argument,       nullptr, 'P'},
             {"exact",    no_argument,       nullptr, 'e'},
             {"bayer",    no_argument,       nullptr, 'B'},
+            {"debayer",    no_argument,       nullptr, 'D'},
             {"nominal",    no_argument,       nullptr, 'n'},
             {"deghosting", required_argument, nullptr, 'd'},
             {"tsv", no_argument, nullptr, 't'},
@@ -200,7 +221,7 @@ void pfshdrraw(int argc, char *argv[]) {
 
     std::stringstream k;
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevuBRd:s:r:o:m:x:k:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevuBDRd:s:r:o:m:x:k:", cmdLineOptions, &optionIndex)) != -1) {
 
         switch (c) {
             /* help */
@@ -219,6 +240,10 @@ void pfshdrraw(int argc, char *argv[]) {
                 break;
             case 'B':
                 isbayer = true;
+                break;
+            case 'D':
+                isbayer = false;
+                demosaic = true;
                 break;
             case 'x':
                 oor_high = atof(optarg);
@@ -464,12 +489,14 @@ void pfshdrraw(int argc, char *argv[]) {
 
     VERBOSE_STR << "applying response..." << endl;
     sp = linear_Response(RGB_out, exposures, opt_saturation_offset_perc, opt_black_offset_perc,
-                         opt_deghosting, opt_scale, rgb_corr, oor_high, oor_low, isbayer);
+                         opt_deghosting, opt_scale, rgb_corr, oor_high, oor_low, isbayer, demosaic);
 
     if (sp > 0) {
         float perc = ceilf(100.0f * sp / size);
-        std::cerr << PROG_NAME << ": " << "saturated pixels found in " << perc << "% (" << sp << " pixels) of the image!" << endl;
+        std::cerr << PROG_NAME << ": " << "saturated pixels found in " << perc << "% (" << sp
+                  << " pixels) of the image!" << endl;
     }
+
     if (rgbe){
         RGBEWriter writer( stdout, true );
         std::string hstring = header.str().substr(0,-1);

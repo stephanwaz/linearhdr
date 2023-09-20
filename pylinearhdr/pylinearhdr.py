@@ -1,3 +1,19 @@
+# Copyright (c) 2023 Stephen Wasilewski, EPFL
+# =======================================================================
+# This program is free software: you can redistribute it and/or
+# modify it under the terms of theGNU Lesser General Public License
+# as published by the Free Software Foundation, either version 3 of
+# the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
+# =======================================================================
+
 from subprocess import Popen, PIPE
 import shlex
 import sys
@@ -72,6 +88,8 @@ def info_from_exif(img, correct, times=True, fo=None, shutterc=None):
             aperture = np.array(aexc)[apmat][0]
         else:
             aperture = 2**(round(log2(aperture**2)*3,0)/6)
+    if np.isinf(aperture):
+        aperture = 1.0
     if times:
         time = "{}:{}:{}:{}:{}".format(*rawinfo[7:12])
     else:
@@ -93,10 +111,20 @@ def header_info(img, fields=("ColorTempAsShot", "Colorspace")):
     return hinfo
 
 
-def name_by_exif(img, prefix=None):
+def name_by_exif(img, prefix=None, aperture=True, iso=True, shutter=True):
     suff = img.rsplit(".", 1)[1]
-    hinfo = get_info(img, ("ISO",  "Aperture",  "ShutterSpeed"))
-    hinfo = re.sub(r"\s+:\s+", " ", hinfo)
+    hinfo = []
+    if iso:
+        hinfo.append("ISO")
+    if aperture:
+        hinfo.append("Aperture")
+    if shutter:
+        hinfo.append("ShutterSpeed")
+    if len(hinfo) > 0:
+        hinfo = get_info(img, hinfo)
+        hinfo = re.sub(r"\s+:\s+", " ", hinfo)
+    else:
+        hinfo = ""
     if prefix is None:
         outn = img.rsplit(".", 1)[0]
     elif "/" in img:
@@ -107,7 +135,10 @@ def name_by_exif(img, prefix=None):
         k, v = i.split()
         if k == "Aperture":
             k = "F-"
-            v = str(int(round(float(v))))
+            if v.lower() != "inf":
+                v = "inf"
+            else:
+                v = str(int(round(float(v))))
         elif k == "ShutterSpeed":
             if "/" in v:
                 v = v.split("/")[-1]
@@ -155,6 +186,8 @@ def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None,
             cs += f" -P {bad_pixels}"
         if bayer:
             cs += " -disinterp"
+        else:
+            cs += " -q 11"
         Popen(shlex.split(f"rawconvert {cs} -Z {tiff} -k {black} -S {white} {img}")).communicate()
     rawinfo = info_from_exif(img, correct, fo=fo, shutterc=shutterc)
     return tiff, *rawinfo

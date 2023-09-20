@@ -38,11 +38,6 @@ configure_file (
         "${PROJECT_BINARY_DIR}/config.h"
 )
 
-add_subdirectory(src)
-
-configure_file(src/bin/extract_data.sh ${CMAKE_INSTALL_PREFIX}/bin/linearhdr_extract COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-
-
 
 set(LIBRAW_PATH ${CMAKE_CURRENT_SOURCE_DIR}/LibRaw)
 file(TO_CMAKE_PATH "${LIBRAW_PATH}" LIBRAW_PATH)
@@ -138,4 +133,7 @@ endmacro(LIBRAW_BUILD_SAMPLES)
 LIBRAW_BUILD_SAMPLES(rawconvert.cpp raw src)
 
 
+add_subdirectory(src)
+
+configure_file(src/bin/extract_data.sh ${CMAKE_INSTALL_PREFIX}/bin/linearhdr_extract COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 

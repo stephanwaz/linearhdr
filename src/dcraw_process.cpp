@@ -14,6 +14,27 @@
 
  */
 
+/* Changes to this file have been made for inclusion in the linearhdr package
+ *
+ * CHANGES: still apply bad_pixel and dark_frame correction even when cropping output
+ *
+ * Copyright (c) 2023 Stephen Wasilewski, EPFL
+ *  =======================================================================
+ *  This program is free software: you can redistribute it and/or
+ *  modify it under the terms of theGNU Lesser General Public License
+ *  as published by the Free Software Foundation, either version 3 of
+ *  the License, or (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ *  Lesser General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program. If not, see <https://www.gnu.org/licenses/>.
+ *  =======================================================================
+ */
+
 #include "../LibRaw/internal/libraw_cxx_defs.h"
 
 int LibRaw::dcraw_process(void)
@@ -51,7 +72,7 @@ int LibRaw::dcraw_process(void)
       remove_zeroes();
       SET_PROC_FLAG(LIBRAW_PROGRESS_REMOVE_ZEROES);
     }
-
+    // linearhdr: still apply bad_pixel and dark_frame correction even when cropping output
     if (O.bad_pixels)
     {
       bad_pixels(O.bad_pixels);

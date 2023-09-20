@@ -1,11 +1,20 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# Copyright (c) 2020 Stephen Wasilewski, HSLU and EPFL
+# Copyright (c) 2023 Stephen Wasilewski, EPFL
 # =======================================================================
-# This Source Code Form is subject to the terms of the Mozilla Public
-# License, v. 2.0. If a copy of the MPL was not distributed with this
-# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+# This program is free software: you can redistribute it and/or
+# modify it under the terms of theGNU Lesser General Public License
+# as published by the Free Software Foundation, either version 3 of
+# the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+# Lesser General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program. If not, see <https://www.gnu.org/licenses/>.
 # =======================================================================
 
 """The setup script."""
@@ -21,7 +30,7 @@ setup(
     author_email='stephanwaz@gmail.com',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
-        'License :: OSI Approved :: Mozilla Public License 2.0 (MPL 2.0)',
+        'License :: OSI Approved :: GNU Lesser General Public License 3.0 (LGPL 3.0)',
         'Natural Language :: English',
         'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
@@ -35,7 +44,7 @@ setup(
         'console_scripts': ['pylinearhdr=pylinearhdr.cli:main'],
     },
     install_requires=requirements,
-    license="Mozilla Public License 2.0 (MPL 2.0)",
+    license="GNU Lesser General Public License 3.0 (LGPL 3.0)",
     long_description=readme,
     keywords='pylinearhdr',
     name='pylinearhdr',
