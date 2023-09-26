@@ -97,4 +97,10 @@ int linear_Response(pfs::Array2D *rgb_out[],
 
 void dht_interpolate(pfs::Array2D *Xj, pfs::Array2D *Yj, pfs::Array2D *Zj);
 
+int first_non_zero_row(pfs::Array2D *X);
+
+int first_non_zero(pfs::Array2D *X);
+
+int grid_color(int i, int j, int g0, int r0);
+
 #endif /* #ifndef _linearhdr_h_ */

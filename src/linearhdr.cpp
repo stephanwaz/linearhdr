@@ -71,6 +71,16 @@ inline float max(float a, float b) {
     return (a > b) ? a : b;
 }
 
+int grid_color(int i, int j, int g0, int r0) {
+    // is green
+    if (j % 2 == ((g0 + i) % 2))
+        return 1;
+    // is red row
+    if (i % 2 == r0)
+        return 0;
+    // is blue row
+    return 2;
+}
 
 float get_exposure_compensationX(const Exposure &ex) {
     return  100.0f * ex.aperture * ex.aperture / ( ex.exposure_time * ex.iso );
@@ -90,7 +100,7 @@ int linear_Response(pfs::Array2D *out[],
                    const float scale,
                    const float rgb_corr[3][3],
                    const float oor_high,
-                   const float oor_low,
+                   float oor_low,
                    bool isbayer,
                    const bool demosaic){
 
@@ -201,7 +211,8 @@ int linear_Response(pfs::Array2D *out[],
             } else if (div >= 1e-15) {
                 (*out[cc])(j) = sum / div;
                 mmax[cc] = (mmax[cc] > (*out[cc])(j)) ? mmax[cc] : (*out[cc])(j);
-                mmin[cc] = (mmin[cc] < (*out[cc])(j)) ? mmin[cc] : (*out[cc])(j);
+                if (!demosaic || (*out[cc])(j) > 0)
+                    mmin[cc] = (mmin[cc] < (*out[cc])(j)) ? mmin[cc] : (*out[cc])(j);
             }
         }
 
@@ -219,14 +230,20 @@ int linear_Response(pfs::Array2D *out[],
         mmin[0] = mmin[1] = mmin[2] = oor_low;
     // Fill in nan values NOTE: removed normalization here
     float x,y,z;
-    for (int j = 0; j < width * height; j++) {
-        for (int cc = 0; cc < 3; cc++) {
-            if ((*out[cc])(j) == -1)
-                (*out[cc])(j) = mmax[cc];
-            else if ((*out[cc])(j) == -2)
-                (*out[cc])(j) = mmin[cc];
-        }
-    }
+
+    int g0 = first_non_zero(out[1]);
+    int r0 = first_non_zero_row(out[0]);
+
+    for (int i = 0; i < height; i++)
+        for (int j = 0; j < width; j++)
+            for (int cc = 0; cc < 3; cc++) {
+                if ((*out[cc])(j, i) == -1)
+                    (*out[cc])(j, i) = mmax[cc];
+                else if ((*out[cc])(j, i) == -2) {
+                    if (!demosaic || grid_color(i, j, g0, r0) == cc)
+                        (*out[cc])(j, i) = mmin[cc];
+                }
+            }
     // demosaic after merge
     if (demosaic){
         dht_interpolate(out[0], out[1], out[2]);

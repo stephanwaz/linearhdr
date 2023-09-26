@@ -13,8 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # =======================================================================
-
-
+import datetime
 import os
 import shutil
 import sys
@@ -23,6 +22,7 @@ import numpy as np
 from clasp import click
 import clasp.click_ext as clk
 from clasp.script_tools import try_mkdir, clean_tmp, pipeline, sglob
+from raytools.mapper import ViewMapper
 
 import pylinearhdr
 import raytools
@@ -196,8 +196,8 @@ shared_run_opts = [
     click.option("-saturation", "-saturation-offset", "-s", default=0.01, help="saturation offset, if white is not LinearityUpperMargin, this must be changed"),
     click.option("-range", "-r", default=0.01, help="lower range of single raw exposure"),
     click.option("--verbose/--no-verbose", default=False, help="passed to linearhdr"),
-    click.option("--interpfirst/--interpsecond", default=True, help="interpolate with raw convert (uses linear) or interpolate after merge (uses DHT)"),
-    click.option("--bayer/--no-bayer", default=False, help="do not interpolate raw channels. forces -colorspace to 'raw' and ignores --interpfirst")
+    click.option("--interpfirst/--interpsecond", default=True, help="interpolate with rawconvert (uses linear) or interpolate after merge (uses DHT)"),
+    click.option("--rawgrid/--no-rawgrid", default=False, help="do not interpolate raw channels. forces -colorspace to 'raw' and ignores --interpfirst")
 ]
 
 
@@ -213,7 +213,7 @@ shared_run_opts = [
 def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.01, range=0.01, hdropts="",
               black="AverageBlackLevel", white="AverageBlackLevel", cscale=None, shutterc=None,
               colorspace='rad', fo=None, sort='shutter', target=None, header=True, xyzcam=None, verbose=False,
-              bayer=False, interpfirst=True, **kwargs):
+              rawgrid=False, interpfirst=True, **kwargs):
     """calibration routine, see README.rst
 
     imgs: list of images
@@ -221,7 +221,7 @@ def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.0
     """
     if verbose:
         hdropts += " --verbose"
-    if bayer:
+    if rawgrid:
         colorspace = 'raw'
         hdropts += " -B"
     elif not interpfirst:
@@ -229,7 +229,7 @@ def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.0
     colorspace = pl.process_colorspace_option(colorspace)
     tiffs = pool_call(pl.calibrate_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black, pbar=False, shutterc=shutterc,
                      white=white, colorspace=colorspace, fo=fo, scale=scale * 10**nd, cscale=cscale, saturation=saturation, r=range, xyzcam=xyzcam,
-                      bayer=bayer or (not interpfirst))
+                      rawgrid=rawgrid or (not interpfirst))
     pl.report_calibrate(tiffs, sort=sort, target=target, header=header)
 
 
@@ -256,12 +256,12 @@ make_list_opts = [
 
 def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
                  crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
-                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, bayer=False,
+                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
                  interpfirst=True, **kwargs):
     """make list routine, use to generate input to linearhdr"""
     if verbose:
         hdropts += " --verbose"
-    if bayer:
+    if rawgrid:
         colorspace = 'raw'
         hdropts += " -B"
     elif not interpfirst:
@@ -276,18 +276,21 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         outf = open(outfn, 'w')
         if not correct:
             hdropts += " --nominal"
-    tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, bayer=bayer or (not interpfirst),
+    tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, rawgrid=rawgrid or (not interpfirst),
                      shutterc=shutterc, listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False, pbar=False)
     if xyzcam is None:
         xyzcam = pl.get_xyz_cam(imgs[0])
     cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale)
+    print(f"# pylinearhdr_VERSION= {pylinearhdr.__version__}", file=outf)
+    print(f"# pylinearhdr " + " ".join(sys.argv[1:]), file=outf)
+    print("# CAPDATE= {}".format(datetime.datetime.now().strftime("%Y:%m:%d %H:%M:%S")), file=outf)
     for h in header:
         print(h, file=outf)
     pl.report(tiffs, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
 
     command = [f"linearhdr -r {range} -o {saturation} {hdropts} {outfn}"]
     if fisheye:
-        command += ["pcomb -f fisheye_corr.cal -o - ", "getinfo -a 'VIEW= -vta -vh 180 -vv 180'"]
+        command += ["raytools solid2ang -"]
     if vfile is not None:
         ocmd = sys.argv
         if "run" in ocmd:
@@ -364,6 +367,15 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
     imgh: hdr with horizontal aligned shadowband
     imgv: hdr with veritcal aligned shadowband
     imgn: hdr with no shadowband
+
+    to recover environment map (outputs into southern hemisphere:
+
+        getinfo testmap.hdr | grep SOURCE= | sed -E 's/[[:blank:]]*[A-Z]+SOURCE=[[:blank:]]*//g' > test.rad
+
+    or to rotate to west (for example):
+
+        getinfo testmap.hdr | grep SOURCE= | sed -E 's/[[:blank:]]*[A-Z]+SOURCE=[[:blank:]]*//g' | xform -rz 90 > test.rad
+
     """
     if flip:
         rov = -rov
@@ -373,13 +385,17 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
     sdata, hs = io.hdr2carray(imgn, header=True)
     blended, skyonly, source = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw, flip=flip,
                                              envmap=envmap, sunloc=sunloc, check=check)
-    vm = imagetools.hdr2vm(imgh)
+    vm = ViewMapper((0.0, -1.0, 0.0), viewangle=180)
     header = []
     if vm is not None:
         header = [vm.header()]
     header += hh + hv + hs
     io.carray2hdr(blended, outf, header)
     if skyonly is not None:
+        print(source)
+        srcsize = (source[3] / np.pi) ** .5 * 360/np.pi
+        header.append("SOLARSOURCE= " + "void light sun 0 0 3 {} {} {} sun source solar 0 0 4 {} {} {} {}".format(*source[4], *source[0:3], srcsize))
+        header.append("SKYSOURCE= " + "void colorpict imgfunc 9 red green blue {} fisheye.cal fish_u fish_v -rz 180 0 0 imgfunc glow imgglow 0 0 4 1 1 1 0 imgglow source sky 0 0 4 0 -1 0 180".format(envmap))
         io.carray2hdr(skyonly, envmap, header)
     # if envmap:
     #     radout = outf.rsplit(".", 1)[0] + ".rad"

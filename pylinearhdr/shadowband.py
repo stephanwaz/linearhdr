@@ -148,7 +148,8 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
 
     if envmap is not None:
         skyonly = np.copy(blend)
-        source = (*pxyz, srcsize, sol_luminance)
+        opxyz = translate.rotate_elem(pxyz[None], 180).ravel()
+        source = (*opxyz, srcsize, sol_luminance)
     else:
         skyonly = source = None
     # draw source on image

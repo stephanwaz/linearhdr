@@ -98,13 +98,17 @@ file(GLOB_RECURSE exclude_libraw_LIB_SRCS CONFIGURE_DEPENDS "${LIBRAW_PATH}/src/
 list(REMOVE_ITEM libraw_LIB_SRCS ${exclude_libraw_LIB_SRCS})
 
 
-# linearhdr patch to dcraw_procees
+# linearhdr patch to dcraw_process
 list(TRANSFORM libraw_LIB_SRCS REPLACE LibRaw/src/postprocessing/dcraw_process.cpp src/dcraw_process.cpp)
 
 add_library(raw ${libraw_LIB_SRCS})
 add_library(libraw::libraw ALIAS raw)
 target_compile_definitions(raw PRIVATE LIBRAW_NOTHREADS)
 
+
+add_subdirectory(src)
+
+configure_file(src/bin/extract_data.sh ${CMAKE_INSTALL_PREFIX}/bin/linearhdr_extract COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 
 # add a small macro so that this is a bit cleaner
 macro(LIBRAW_BUILD_SAMPLES)
@@ -129,11 +133,6 @@ macro(LIBRAW_BUILD_SAMPLES)
 
 endmacro(LIBRAW_BUILD_SAMPLES)
 
-
 LIBRAW_BUILD_SAMPLES(rawconvert.cpp raw src)
 
-
-add_subdirectory(src)
-
-configure_file(src/bin/extract_data.sh ${CMAKE_INSTALL_PREFIX}/bin/linearhdr_extract COPYONLY FILE_PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
 

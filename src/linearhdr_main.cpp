@@ -74,6 +74,7 @@
 using namespace std;
 
 #define PROG_NAME "linearhdr"
+#define PROG_VERSION "0.1.1"
 
 inline float max(float a, float b) {
     return (a > b) ? a : b;
@@ -96,28 +97,6 @@ inline float max(float a, float b, float c, float d) {
 }
 
 struct FrameInfo {float etime; float iso; float aperture; float factor;};
-
-inline FrameInfo frame_info(pfs::Frame *frame, float scale){
-    FrameInfo result = {1.f, 100.f, 1.f, 1.f};
-
-    const char *etime_str =
-            frame->getTags()->getString("exposure_time");
-
-    result.etime = atof(etime_str);
-
-    const char *iso_str =
-            frame->getTags()->getString("ISO");
-    if (iso_str != nullptr)
-        result.iso = atof(iso_str);
-
-    const char *aperture_str = frame->getTags()->getString("aperture");
-    if (aperture_str != nullptr)
-        result.aperture = atof(aperture_str);
-
-    result.factor = scale * 100.0f * result.aperture * result.aperture / ( result.iso * result.etime );
-    return result;
-
-}
 
 FrameInfo correct_exposure(FrameInfo info) {
     FrameInfo result = {1.f, 100.f, 1.f, 1.f};
@@ -151,7 +130,6 @@ void printHelp() {
                     "\t\toverriden by RGBcalibration in header line applies to output colorspace (after Camera2RGB in header line)\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
                     "\t\tuse linearhdr_calibrate to calculate\n"
-                    "\t[--cull, -c]: throw away extra exposures that are not needed to keep output in range\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
                     "\t[--bayer, -B]: expect mosaic input (rawconvert --disinterp) ignores color correction in exposure_list header\n"
                     "\t[--debayer, -D]: interpolate hdr output, overrides --bayer, but expects same input (rawconvert --disinterp)\n"
@@ -159,18 +137,26 @@ void printHelp() {
                     "\t[--exact, -e]: input camera values interpreted as exact (default=True)\n"
                     "\t[--nominal, -n]: input camera values interpreted as nominal (default=False)\n"
                     "\t[--verbose, -v]\n\t[--help]\n\n"
-                    "If exposure_list is given, images are read from file formatted as:\n"
+                    "images are read from file formatted as:\n"
                     "\t<image1.tiff> <iso> <aperture> <exposure_time>\n"
                     "\t<image2.tiff> <iso> <aperture> <exposure_time>\n\t...\n\n"
                     "list should be sorted by longest exposure time to shortest (only critical if --cull)\n"
-                    "else, program expects a sequence of images (formatted as from pfsin on the stdin),\n"
                     "use/see 'pylinearhdr makelist' for an example.\n"
                     "By default, linearhdr expects exact aperture and shutter speed. so if you are making this list manually"
                     " using nominal values, be sure to use --nominal to better estimate exposure. Note the is generally"
-                    " not very reliable as fast exposure times are often dramatically different from the default correction.\n\n");
+                    " not very reliable as fast exposure times / small apertures can be dramatically different from the "
+                    "default correction.\n\n");
 }
 
 void pfshdrraw(int argc, char *argv[]) {
+
+    std::stringstream header;
+    header << PROG_NAME << "_VERSION= " << PROG_VERSION << endl;
+    header << argv[0];
+    for (int i = 1; i < argc-1; i++){
+        header << " " << argv[i];
+    }
+    header << endl;
 
 
     pfs::DOMIO pfsio;
@@ -181,7 +167,6 @@ void pfshdrraw(int argc, char *argv[]) {
     float opt_black_offset_perc = 0.01;
     float opt_deghosting = -1;
     float opt_scale = 1.0f;
-    bool keep = true;
     bool dataonly = false;
     bool rgbe = true;
     bool nominal = false;
@@ -201,7 +186,6 @@ void pfshdrraw(int argc, char *argv[]) {
     static struct option cmdLineOptions[] = {
             {"help",       no_argument,       nullptr, 'h'},
             {"verbose",    no_argument,       nullptr, 'v'},
-            {"cull",    required_argument,       nullptr, 'c'},
             {"rgbe",    no_argument,       nullptr, 'R'},
             {"pfs",    no_argument,       nullptr, 'P'},
             {"exact",    no_argument,       nullptr, 'e'},
@@ -278,9 +262,6 @@ void pfshdrraw(int argc, char *argv[]) {
             case 't':
                 dataonly = true;
                 break;
-            case 'c':
-                keep = false;
-                break;
             case 'R':
                 rgbe = true;
                 break;
@@ -291,7 +272,11 @@ void pfshdrraw(int argc, char *argv[]) {
                 throw QuietException();
         }
     }
-    bool fromfile = argv[optind] != nullptr;
+
+    if (argv[optind] == nullptr){
+        printHelp();
+        throw QuietException();
+    }
 
     std::ifstream infile(argv[optind]);
 
@@ -311,139 +296,121 @@ void pfshdrraw(int argc, char *argv[]) {
     ExposureList imgsG;
     ExposureList imgsB;
 
-    std::stringstream header;
+
     while (true) {
         pmax = 0;
         pfs::Frame *iframe = nullptr;
         FrameInfo info = {1.f, 100.f, 1.f, 1.f};
 
-        if (!fromfile){
-            //--- read frames from pfs stream
-            iframe = pfsio.readFrame(stdin);
-            if (iframe == nullptr)
-                break; // No more frames
-        } else {
-            //--- read frames from list by parsing file
-            std::string line, framefile;
-            if (std::getline(infile, line)) {
-                std::istringstream iss(line);
-                if (!(iss >> framefile)){
-                    continue;
-                }
-                if (!(iss >> info.iso >> info.aperture >> info.etime)) {
-                    if (framefile.at(0) == '#') {
-                        std::string comment = iss.str();
-                        const uint begin =  comment.find_first_not_of("# \t");
-                        const uint equal = comment.find_first_of('=');
-                        if (!isbayer && comment.substr(begin, equal - begin) == "Camera2RGB"){
-                            istringstream ss(comment.substr(equal+1, comment.size()));
-                            ss >> rgb_corr[0][0] >> rgb_corr[0][1] >> rgb_corr[0][2];
-                            ss >> rgb_corr[1][0] >> rgb_corr[1][1] >> rgb_corr[1][2];
-                            ss >> rgb_corr[2][0] >> rgb_corr[2][1] >> rgb_corr[2][2];
-                        }
-                        if (!isbayer && comment.substr(begin, equal - begin) == "RGBcalibration"){
-                            istringstream ss(comment.substr(equal+1, comment.size()));
-                            ss >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
-                        }
-                        if ( comment.substr(begin, equal - begin) == "LuminanceRGB"){
-                            istringstream ss(comment.substr(equal+1, comment.size()));
-                            ss >> vlambda[0] >> vlambda[1] >> vlambda[2];
-                        }
-                        header << comment.substr(begin, comment.size()) << endl;
+        //--- read frames from list by parsing file
+        std::string line, framefile;
+        if (std::getline(infile, line)) {
+            std::istringstream iss(line);
+            if (!(iss >> framefile)){
+                continue;
+            }
+            if (!(iss >> info.iso >> info.aperture >> info.etime)) {
+                if (framefile.at(0) == '#') {
+                    std::string comment = iss.str();
+                    const uint begin =  comment.find_first_not_of("# \t");
+                    const uint equal = comment.find_first_of('=');
+                    if (!isbayer && comment.substr(begin, equal - begin) == "Camera2RGB"){
+                        istringstream ss(comment.substr(equal+1, comment.size()));
+                        ss >> rgb_corr[0][0] >> rgb_corr[0][1] >> rgb_corr[0][2];
+                        ss >> rgb_corr[1][0] >> rgb_corr[1][1] >> rgb_corr[1][2];
+                        ss >> rgb_corr[2][0] >> rgb_corr[2][1] >> rgb_corr[2][2];
                     }
-                    continue;
+                    if (!isbayer && comment.substr(begin, equal - begin) == "RGBcalibration"){
+                        istringstream ss(comment.substr(equal+1, comment.size()));
+                        ss >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
+                    }
+                    if ( comment.substr(begin, equal - begin) == "LuminanceRGB"){
+                        istringstream ss(comment.substr(equal+1, comment.size()));
+                        ss >> vlambda[0] >> vlambda[1] >> vlambda[2];
+                    }
+                    header << comment.substr(begin, comment.size()) << endl;
                 }
-                if (nominal)
-                    info = correct_exposure(info);
-                info.factor = opt_scale * 100.0f * info.aperture * info.aperture / ( info.iso * info.etime );
+                continue;
+            }
+            if (nominal)
+                info = correct_exposure(info);
+            info.factor = opt_scale * 100.0f * info.aperture * info.aperture / ( info.iso * info.etime );
 
-                FILE *fh = fopen( framefile.c_str(), "rb");
-                pfs::FrameFile ff = pfs::FrameFile( fh, framefile.c_str());
-                HDRTiffReader reader( ff.fileName);
-                iframe = pfsio.createFrame( reader.getWidth(), reader.getHeight() );
-                pfs::Channel *X, *Y, *Z;
-                iframe->createXYZChannels( X, Y, Z );
+            FILE *fh = fopen( framefile.c_str(), "rb");
+            pfs::FrameFile ff = pfs::FrameFile( fh, framefile.c_str());
+            HDRTiffReader reader( ff.fileName);
+            iframe = pfsio.createFrame( reader.getWidth(), reader.getHeight() );
+            pfs::Channel *X, *Y, *Z;
+            iframe->createXYZChannels( X, Y, Z );
+            reader.readImage( X, Y, Z );
 
-                reader.readImage( X, Y, Z );
+        } else
+            break; //no more lines
 
+        pfs::Channel *X = nullptr;
+        pfs::Channel *Y = nullptr;
+        pfs::Channel *Z = nullptr;
 
-            } else
-                break; //no more lines
-        }
+        iframe->getXYZChannels(X, Y, Z);
 
-        if (keep || oorange) {
+        if (X == nullptr || Y == nullptr || Z == nullptr)
+            throw pfs::Exception("missing XYZ channels in the PFS stream (try to preview your files using pfsview)");
 
-            pfs::Channel *X = nullptr;
-            pfs::Channel *Y = nullptr;
-            pfs::Channel *Z = nullptr;
+        // frame size
+        width = Y->getCols();
+        height = Y->getRows();
+        size = width * height;
 
-            iframe->getXYZChannels(X, Y, Z);
+        if (dataonly){
+            fmax = info.factor;
+            float r, g, b;
+            for (int i = 0; i < size; i++) {
+                r = ((*X)(i) * rgb_corr[0][0] + (*Y)(i) * rgb_corr[0][1] + (*Z)(i) * rgb_corr[0][2]) * rgbcal[0];
+                g = ((*X)(i) * rgb_corr[1][0] + (*Y)(i) * rgb_corr[1][1] + (*Z)(i) * rgb_corr[1][2]) * rgbcal[1];
+                b = ((*X)(i) * rgb_corr[2][0] + (*Y)(i) * rgb_corr[2][1] + (*Z)(i) * rgb_corr[2][2]) * rgbcal[2];
+                std::cout << (*X)(i) << "\t" << (*Y)(i) << "\t" << (*Z)(i) << "\t";
 
-            if (!fromfile){
-                info = frame_info(iframe, opt_scale);
-                pfs::transformColorSpace(pfs::CS_XYZ, X, Y, Z, pfs::CS_RGB, X, Y, Z);
+                pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
+                float below = min((*X)(i), (*Y)(i), (*Z)(i)) < opt_black_offset_perc;
+                float above = max((*X)(i), (*Y)(i), (*Z)(i)) > 1 - opt_saturation_offset_perc;
+                float lum = (vlambda[0]*r + vlambda[1]*g + vlambda[2]*b) * fmax;
+                std::cout << r * fmax << "\t" << g * fmax << "\t" << b * fmax << "\t" << lum << "\t" << below << "\t" << above << std::endl;
+            }
+            std::cout  << std::endl;
+        } else {
+            Exposure eR, eG, eB;
+            eR.iso = info.iso;
+            eG.iso = info.iso;
+            eB.iso = info.iso;
+            eR.aperture = eG.aperture = eB.aperture = info.aperture;
+            eR.exposure_time = eG.exposure_time = eB.exposure_time = info.etime;
+            eR.yi = new pfs::Array2DImpl(width, height);
+            eG.yi = new pfs::Array2DImpl(width, height);
+            eB.yi = new pfs::Array2DImpl(width, height);
+
+            if (eR.yi == nullptr || eG.yi == nullptr || eB.yi == nullptr)
+                throw pfs::Exception("could not allocate memory for source exposure");
+
+            for (int i = 0; i < size; i++) {
+
+                (*eR.yi)(i) = (*X)(i);
+                (*eG.yi)(i) = (*Y)(i);
+                (*eB.yi)(i) = (*Z)(i);
+                pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
             }
 
-
-            if (X == nullptr || Y == nullptr || Z == nullptr)
-                throw pfs::Exception("missing XYZ channels in the PFS stream (try to preview your files using pfsview)");
-
-            // frame size
-            width = Y->getCols();
-            height = Y->getRows();
-            size = width * height;
-
-            if (dataonly){
-                fmax = info.factor;
-                float r, g, b;
-                for (int i = 0; i < size; i++) {
-                    r = ((*X)(i) * rgb_corr[0][0] + (*Y)(i) * rgb_corr[0][1] + (*Z)(i) * rgb_corr[0][2]) * rgbcal[0];
-                    g = ((*X)(i) * rgb_corr[1][0] + (*Y)(i) * rgb_corr[1][1] + (*Z)(i) * rgb_corr[1][2]) * rgbcal[1];
-                    b = ((*X)(i) * rgb_corr[2][0] + (*Y)(i) * rgb_corr[2][1] + (*Z)(i) * rgb_corr[2][2]) * rgbcal[2];
-                    std::cout << (*X)(i) << "\t" << (*Y)(i) << "\t" << (*Z)(i) << "\t";
-
-                    pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
-                    float below = min((*X)(i), (*Y)(i), (*Z)(i)) < opt_black_offset_perc;
-                    float above = max((*X)(i), (*Y)(i), (*Z)(i)) > 1 - opt_saturation_offset_perc;
-                    float lum = (vlambda[0]*r + vlambda[1]*g + vlambda[2]*b) * fmax;
-                    std::cout << r * fmax << "\t" << g * fmax << "\t" << b * fmax << "\t" << lum << "\t" << below << "\t" << above << std::endl;
-                }
-                std::cout  << std::endl;
-            } else {
-                Exposure eR, eG, eB;
-                eR.iso = info.iso;
-                eG.iso = info.iso;
-                eB.iso = info.iso;
-                eR.aperture = eG.aperture = eB.aperture = info.aperture;
-                eR.exposure_time = eG.exposure_time = eB.exposure_time = info.etime;
-                eR.yi = new pfs::Array2DImpl(width, height);
-                eG.yi = new pfs::Array2DImpl(width, height);
-                eB.yi = new pfs::Array2DImpl(width, height);
-
-                if (eR.yi == nullptr || eG.yi == nullptr || eB.yi == nullptr)
-                    throw pfs::Exception("could not allocate memory for source exposure");
-
-                for (int i = 0; i < size; i++) {
-
-                    (*eR.yi)(i) = (*X)(i);
-                    (*eG.yi)(i) = (*Y)(i);
-                    (*eB.yi)(i) = (*Z)(i);
-                    pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
-                }
-
-                // add to exposures list
-                imgsR.push_back(eR);
-                imgsG.push_back(eG);
-                imgsB.push_back(eB);
-            }
-            fmax = info.factor * (1 - opt_saturation_offset_perc);
-            fmin = fmax * opt_black_offset_perc;
-            gmax = max(gmax, fmax);
-            gmin = min(gmin, fmin);
-
-            frame_no++;
-            VERBOSE_STR << "frame #" << frame_no << ", min:" << fmin << ", max:" << fmax <<  endl;
+            // add to exposures list
+            imgsR.push_back(eR);
+            imgsG.push_back(eG);
+            imgsB.push_back(eB);
         }
+        fmax = info.factor * (1 - opt_saturation_offset_perc);
+        fmin = fmax * opt_black_offset_perc;
+        gmax = max(gmax, fmax);
+        gmin = min(gmin, fmin);
+
+        frame_no++;
+        VERBOSE_STR << "frame #" << frame_no << ", min:" << fmin << ", max:" << fmax <<  endl;
 
         oorange = oorange && (pmax > 1 - opt_saturation_offset_perc);
         pfsio.freeFrame(iframe);

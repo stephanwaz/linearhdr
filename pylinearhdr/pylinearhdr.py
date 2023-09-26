@@ -169,7 +169,7 @@ def process_dcraw_opt(val, img, callexif=True, avg=False):
     raise ValueError(f"Bad option given '{val}' could not be processed as a exiftool parameter")
 
 
-def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None, bad_pixels=None, bayer=False,
+def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None, bad_pixels=None, rawgrid=False,
                   black="PerChannelBlackLevel", white="LinearityUpperMargin", fo=None, shutterc=None, tiff=None):
     correct = correct or fo or shutterc
     black = process_dcraw_opt(black, img, avg=True)
@@ -184,7 +184,7 @@ def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None,
             cs = "-B {} {} {} {}".format(*crop)
         if bad_pixels is not None:
             cs += f" -P {bad_pixels}"
-        if bayer:
+        if rawgrid:
             cs += " -disinterp"
         else:
             cs += " -q 11"
@@ -224,7 +224,7 @@ def mtx_pw(mtx):
     return primaries, whitepoint
 
 
-def cam_color_mtx(xyzcam, cs='rad', cscale=None, normalize=True):
+def cam_color_mtx(xyzcam, cs='rad', cscale=None):
     """calculate camRGB->RGB from camera xyz->cam (from raw-identify or custom) and rgb primaries/whitepoint """
     # xyz->camRGB from adobeDNG/libraw/dcraw
     if cs == 'raw':
@@ -239,9 +239,6 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None, normalize=True):
 
     # rgb->camRGB
     rgb_cam = np.asarray(xyzcam).reshape(3, 3) @ rgb_xyz
-    # normalize
-    # if normalize:
-    #     rgb_cam = rgb_cam / np.sum(rgb_cam, axis=1, keepdims=True)
     # invert to camRGB->rgb
     cam_rgb = np.linalg.inv(rgb_cam)
     cam_rgbs = " ".join([f"{i:.08f}" for i in cam_rgb.ravel()])
@@ -258,50 +255,15 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None, normalize=True):
         header.append(f"# RGBcalibration= {ccal}")
     return cam_rgb, header
 
-# def cam_color_mtx(xyzcam, cs='rad', cscale=None):
-#     """calculate camRGB->RGB from camera xyz->cam (from raw-identify or custom) and rgb primaries/whitepoint """
-#     # xyz->camRGB from adobeDNG/libraw/dcraw
-#     if cs == 'raw':
-#         return np.eye(3), [f"# Camera2RGB= 1 0 0 0 1 0 0 0 1"]
-#     if cs == 'rad':
-#         cs = PREDEFINED_COLORS['rad']
-#     elif cs == 'srgb':
-#         cs = PREDEFINED_COLORS['srgb']
-#     else:
-#         cs = (np.asarray(cs[0]).ravel(), np.asarray(cs[1]).ravel())
-#     rgb_xyz = pw_mtx(*cs)
-#
-#     # rgb->camRGB
-#     rgb_cam = np.asarray(xyzcam).reshape(3, 3) @ rgb_xyz
-#     cam_rgb = np.linalg.inv(np.asarray(xyzcam).reshape(3, 3)) @ np.linalg.inv(rgb_xyz)
-#     print(xyzcam, rgb_xyz, cam_rgb, file=sys.stderr)
-#     rgb_cam = rgb_xyz @ np.asarray(xyzcam).reshape(3, 3)
-#     # normalize
-#     # rgb_cam = rgb_cam / np.sum(rgb_cam, axis=1, keepdims=True)
-#     # invert to camRGB->rgb
-#     cam_rgb = np.linalg.inv(rgb_cam)
-#     cam_rgbs = " ".join([f"{i:.08f}" for i in cam_rgb.ravel()])
-#
-#     ps = " ".join([f"{i:.04f}" for i in cs[0]])
-#     ws = " ".join([f"{i:.04f}" for i in cs[1]])
-#     ls = " ".join([f"{i:.08f}" for i in rgb_xyz[1]])
-#     header = [f"# Camera2RGB= {cam_rgbs}",
-#               f"# TargetPrimaries= {ps}",
-#               f"# TargetWhitePoint= {ws}",
-#               f"# LuminanceRGB= {ls}"]
-#     if cscale is not None:
-#         ccal = " ".join([str(i) for i in cscale])
-#         header.append(f"# RGBcalibration= {ccal}")
-#     return cam_rgb, header
-
 
 def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLevel", xyzcam=None, cscale=None, shutterc=None,
-                    white="LinearityUpperMargin", colorspace='rad', fo=None, scale=1.0, saturation=0.01, r=0.01, bayer=False):
+                    white="LinearityUpperMargin", colorspace='rad', fo=None, scale=1.0, saturation=0.01, r=0.01, rawgrid=False):
     if xyzcam is None:
         xyzcam = get_xyz_cam(img)
     cam_rgb, header = cam_color_mtx(xyzcam, colorspace, cscale=cscale)
     tiff = img + "_calibrate.tiff"
-    tiff, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white, tiff=tiff, fo=fo, shutterc=shutterc, bayer=bayer)
+    tiff, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white,
+                                         tiff=tiff, fo=fo, shutterc=shutterc, rawgrid=rawgrid)
     iso = iso/scale
     txt = img + "_calibrate.txt"
     f = open(txt, 'w')
@@ -328,7 +290,7 @@ def report(tiffs, s=False, l=False, scale=1, sat_w=0.99, sat_b=.01, outf=None):
         if not s:
             capdate = sorted([tiffs[0][-1].strip(), tiffs[-1][-1].strip()])
             stop = capdate[-1].rsplit(" ", 1)[1]
-            print(f"# CAPDATE= {capdate[0]}-{stop}", file=outf)
+            print(f"# SEQUENCECAPDATE= {capdate[0]}-{stop}", file=outf)
     for tiff, sh, ap, iso, time in tiffs:
         if l:
             fmax = scale * 100 * ap * ap * sh / iso
