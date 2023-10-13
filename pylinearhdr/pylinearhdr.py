@@ -237,8 +237,9 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None):
         cs = (np.asarray(cs[0]).ravel(), np.asarray(cs[1]).ravel())
     rgb_xyz = pw_mtx(*cs)
 
+    xyz_cam = np.asarray(xyzcam).reshape(3, 3)
     # rgb->camRGB
-    rgb_cam = np.asarray(xyzcam).reshape(3, 3) @ rgb_xyz
+    rgb_cam = xyz_cam @ rgb_xyz
     # invert to camRGB->rgb
     cam_rgb = np.linalg.inv(rgb_cam)
     cam_rgbs = " ".join([f"{i:.08f}" for i in cam_rgb.ravel()])

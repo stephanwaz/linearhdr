@@ -177,7 +177,7 @@ void pfshdrraw(int argc, char *argv[]) {
     float rgb_corr[3][3] = {{1.0, 0.0, 0.0},
                             {0.0, 1.0, 0.0},
                             {0.0, 0.0, 1.0}};
-    float vlambda[3] = {0.212656, 0.715158, 0.072186};
+    float vlambda[3] = {0.333333, 0.333334, 0.333333};
     float rgbcal[3] = {1.0, 1.0, 1.0};
 
     /* helper */
@@ -455,8 +455,9 @@ void pfshdrraw(int argc, char *argv[]) {
     const ExposureList *exposures[] = {&imgsR, &imgsG, &imgsB};
 
     VERBOSE_STR << "applying response..." << endl;
-    sp = linear_Response(RGB_out, exposures, opt_saturation_offset_perc, opt_black_offset_perc,
-                         opt_deghosting, opt_scale, rgb_corr, oor_high, oor_low, isbayer, demosaic);
+    sp = linear_Response(RGB_out, exposures, opt_saturation_offset_perc,
+                         opt_black_offset_perc, opt_deghosting,
+                         opt_scale, vlambda, rgb_corr, oor_high, oor_low, isbayer, demosaic);
 
     if (sp > 0) {
         float perc = ceilf(100.0f * sp / size);

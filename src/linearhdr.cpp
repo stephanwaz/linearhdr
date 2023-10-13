@@ -89,7 +89,7 @@ float get_exposure_compensationX(const Exposure &ex) {
 float get_weight(const double x, const double b = 25, const double m = 5){
     // w[i] = eG.exposure_time;
     // y\ =\ \frac{1}{1+e^{-b\cdot\min\left(1-x,x\right)+m}}
-    return 1 / (1+ std::exp(-b * min(1-x, x) + m));
+    return x / (1+ std::exp(-b * min(1-x, x) + m));
 }
 
 int linear_Response(pfs::Array2D *out[],
@@ -98,6 +98,7 @@ int linear_Response(pfs::Array2D *out[],
                    const float opt_black_offset,
                    float deghosting_value,
                    const float scale,
+                   const float vlambda[3],
                    const float rgb_corr[3][3],
                    const float oor_high,
                    float oor_low,
@@ -105,12 +106,17 @@ int linear_Response(pfs::Array2D *out[],
                    const bool demosaic){
 
     isbayer = isbayer or demosaic;
+    int g0 = first_non_zero(out[1]);
+    int r0 = first_non_zero_row(out[0]);
+
     // number of exposures
     int N = imgs[0]->size();
 
     // frame size
     int width = out[0]->getCols();
     int height = out[0]->getRows();
+
+    int NP = width * height;
 
     // number of saturated pixels
     int saturated_pixels = 0;
@@ -119,137 +125,167 @@ int linear_Response(pfs::Array2D *out[],
     float mmax[3] = {1e-30, 1e-30, 1e-30};
     float mmin[3] = {1e30, 1e30, 1e30};
 
-    // For each pixel
+    float aavg[3] = {0.0, 0.0, 0.0};
+    float ravg[3] = {0.0, 0.0, 0.0};
+
     int skipped_deghost = 0;
-    for (int j = 0; j < width * height; j++) {
-        bool saturated[3] = {false, false, false};
-        bool under[3] = {false, false, false};
+    float lummax = 1e-30;
+    float lummin = 1e30;
+    float lum;
+    int k;
+    int ccf = 0;
+    int cinc = 1;
+    if (isbayer)
+        cinc = 3;
 
-        float X[3][N];
-        float w[3][N];
-        bool saturated_exp[N];
-        bool under_exp[N];
-        bool skip_exp[N];
-        fill(saturated_exp, saturated_exp + N, false);
-        fill(under_exp, under_exp + N, false);
-        fill(skip_exp, skip_exp + N, false);
+    int mi = 0;
+    int mj = 0;
 
-        // track reference frame for deghosting
-        int ref = 0;
-        bool foundref = false;
+    // loop over each pixel
+    for (int i = 0; i < height; i++) {
+        for (int j = 0; j < width; j++) {
+            k = j + i * width;
 
-        // First compute scene radiances
-        for (int i = 0; i < N; i++) {
-            for (int cc = 0; cc < 3; cc++) {
-                const Exposure &expo = (*imgs[cc])[i];
-                X[cc][i] = (*expo.yi)(j) * get_exposure_compensationX(expo) * scale;
-                w[cc][i] = get_weight((*expo.yi)(j));
-                saturated_exp[i] = (*expo.yi)(j) >= 1 - opt_saturation_offset || saturated_exp[i];
-                // when isbayer, this value tracks not under-exposed
-                if (isbayer)
-                    under_exp[i] = (*expo.yi)(j) > opt_black_offset || under_exp[i];
-                else
-                    under_exp[i] = (*expo.yi)(j) <= opt_black_offset || under_exp[i];
-            }
-            under_exp[i] = under_exp[i] != isbayer;
-            if (saturated_exp[i] || under_exp[i]){
-                w[0][i] = 0;
-                w[1][i] = 0;
-                w[2][i] = 0;
-            } else if (!foundref){
-                // use first (slowest) exposure (least noise as reference frame for deghosting)
-                ref = i;
-                foundref = true;
+            float X[3][N];
+            float w[N];
+            bool saturated_exp[N];
+            bool under_exp[N];
+            bool skip_exp[N];
+            fill(w, w + N, 1.0);
+            fill(saturated_exp, saturated_exp + N, false);
+            fill(under_exp, under_exp + N, false);
+            fill(skip_exp, skip_exp + N, false);
+
+            // track reference frame for deghosting
+            int ref = 0;
+            bool foundref = false;
+
+            // only operate on relevant color when isbayer (modifies function of all cc loops)
+            if (isbayer) {
+                ccf = grid_color(i, j, g0, r0);
             }
 
-        }
-
-        if (deghosting_value > 0) {
-            // Compute the number of pixels to be skipped due to deghosting
-            for (int i = 0; i < N; i++)
-                if (i != ref) {
-
-                    float deviation_from_ref = 0;
-                    for (int cc = 0; cc < 3; cc++) {
-                        //deghost only on luminance unless RGB
-                        //use absolute deviation
-                        if (deghosting_value >= 1)
-                            deviation_from_ref = max(deviation_from_ref,
-                                                     fabs((float) (X[cc][i] - X[cc][ref])));
-                        else
-                            deviation_from_ref = max(deviation_from_ref,
-                                                     fabs((float) (1 - X[cc][i] / X[cc][ref])));
-                    }
-                    skip_exp[i] = deviation_from_ref > deghosting_value;
-                    if (skip_exp[i])
-                        skipped_deghost++;
+            // First compute scene values, weights and reference frames for deghosting
+            for (int n = 0; n < N; n++) {
+                for (int cc = ccf; cc < 3; cc += cinc) {
+                    X[cc][n] = (*(*imgs[cc])[n].yi)(k) * get_exposure_compensationX((*imgs[cc])[n]) * scale;
+                    w[n] = min(w[n], get_weight((*(*imgs[cc])[n].yi)(k)));
+                    saturated_exp[n] = ((*(*imgs[cc])[n].yi)(k) >= 1 - opt_saturation_offset) || saturated_exp[n];
+                    under_exp[n] = ((*(*imgs[cc])[n].yi)(k) <= opt_black_offset) || under_exp[n];
                 }
-        }
+                if (!foundref && (!saturated_exp[n] && !under_exp[n])) {
+                    // use first (slowest) exposure (least noise as reference frame for deghosting)
+                    ref = n;
+                    foundref = true;
+                }
+            }
 
-        for (int cc = 0; cc < 3; cc++) {
+            // flag frames to skip for deghosting
+            if (deghosting_value > 0)
+                for (int n = 0; n < N; n++)
+                    if (n != ref) {
+                        float deviation_from_ref = 0;
+                        for (int cc = ccf; cc < 3; cc += cinc) {
+                            //use absolute deviation
+                            if (deghosting_value >= 1)
+                                deviation_from_ref = max(deviation_from_ref, fabs((float) (X[cc][n] - X[cc][ref])));
+                            else
+                                deviation_from_ref = max(deviation_from_ref, fabs((float) (1 - X[cc][n] / X[cc][ref])));
+                        }
+                        skip_exp[n] = deviation_from_ref > deghosting_value;
+                        if (skip_exp[n])
+                            skipped_deghost++;
+                    }
 
-            float sum = 0.0f;
             float div = 0.0f;
             bool all_under = true;
             bool all_over = true;
 
-            // For each exposure
-            for (int i = 0; i < N; i++) {
-                all_under &= under_exp[i];
-                all_over &= saturated_exp[i];
-                if (!(saturated_exp[i] || under_exp[i] || (deghosting_value != -1 && skip_exp[i]))) {
-                    sum += X[cc][i] * w[cc][i];
-                    div += w[cc][i];
+            // loop over exposures to compute combined value
+            for (int n = 0; n < N; n++) {
+                all_under &= under_exp[n];
+                all_over &= saturated_exp[n];
+                if (!(saturated_exp[n] || under_exp[n] || skip_exp[n])) {
+                    div += w[n];
+                    for (int cc = ccf; cc < 3; cc += cinc) {
+                        (*out[cc])(k) += X[cc][n] * w[n];
+                    }
                 }
             }
-            if (all_under) {
-                (*out[cc])(j) = -2;
-                under[cc] = true;
-            } else if (all_over) {
-                (*out[cc])(j) = -1;
-                saturated[cc] = true;
-            } else if (div >= 1e-15) {
-                (*out[cc])(j) = sum / div;
-                mmax[cc] = (mmax[cc] > (*out[cc])(j)) ? mmax[cc] : (*out[cc])(j);
-                if (!demosaic || (*out[cc])(j) > 0)
-                    mmin[cc] = (mmin[cc] < (*out[cc])(j)) ? mmin[cc] : (*out[cc])(j);
+
+            // flag oob values, update output and store min/max value
+            for (int cc = ccf; cc < 3; cc += cinc) {
+                if (all_under) {
+                    (*out[cc])(k) = -2;
+                    under_pixels++;
+                } else if (all_over) {
+                    (*out[cc])(k) = -1;
+                    saturated_pixels++;
+                } else {
+                    (*out[cc])(k) = (*out[cc])(k) / div;
+                    if (isbayer) {
+                        mmax[cc] = (mmax[cc] > (*out[cc])(k)) ? mmax[cc] : (*out[cc])(k);
+                        mmin[cc] = (mmin[cc] < (*out[cc])(k)) ? mmin[cc] : (*out[cc])(k);
+                    }
+                }
+            }
+
+            // store min/max luminance and running color averages
+            if (!isbayer && (!all_over && !all_under)) {
+                lum = (*out[0])(k) * vlambda[0] + (*out[1])(k) * vlambda[1] + (*out[2])(k) * vlambda[2];
+                lummin = (lum < lummin) ? lum : lummin;
+                lummax = (lum > lummax) ? lum : lummax;
+                for (int cc = ccf; cc < 3; cc += cinc) {
+                    aavg[cc] += (*out[cc])(k) / NP;
+                    ravg[cc] += ((*out[cc])(k) / lum) / NP;
+                    mmin[cc] = (lum < lummin) ? (*out[cc])(k) : mmin[cc];
+                    mmax[cc] = (lum < lummax) ? (*out[cc])(k) : mmax[cc];
+                }
             }
         }
+    }
 
-        if (under[0] || under[1] || under[2]) {
-            under_pixels++;
+    if (oor_high >= 0)
+        lummax = oor_high;
+    if (oor_low >= 0)
+        lummin = oor_low;
+
+    // correct min/max values to luminance (avoids magenta highlights for out of bounds values)
+    if (!isbayer) {
+        for (int cc = ccf; cc < 3; cc += cinc) {
+            aavg[cc] = aavg[cc] * NP / (NP - under_pixels - saturated_pixels);
+            ravg[cc] = ravg[cc] * NP / (NP - under_pixels - saturated_pixels);
         }
-        if (saturated[0] || saturated[1] || saturated[2]) {
-            saturated_pixels++;
+        int alum = aavg[0] * vlambda[0] + aavg[1] * vlambda[1] + aavg[2] * vlambda[2];
+        int rlum = ravg[0] * vlambda[0] + ravg[1] * vlambda[1] + ravg[2] * vlambda[2];
+
+
+        for (int cc = ccf; cc < 3; cc += cinc) {
+            mmin[cc] = ravg[cc] * lummin / rlum;
+            mmax[cc] = aavg[cc] * lummax / alum;
         }
 
     }
-    if (oor_high >= 0)
-        mmax[0] = mmax[1] = mmax[2] = oor_high;
-    if (oor_low >= 0)
-        mmin[0] = mmin[1] = mmin[2] = oor_low;
-    // Fill in nan values NOTE: removed normalization here
-    float x,y,z;
 
-    int g0 = first_non_zero(out[1]);
-    int r0 = first_non_zero_row(out[0]);
-
+    // Fill in out of range values
     for (int i = 0; i < height; i++)
-        for (int j = 0; j < width; j++)
-            for (int cc = 0; cc < 3; cc++) {
-                if ((*out[cc])(j, i) == -1)
-                    (*out[cc])(j, i) = mmax[cc];
-                else if ((*out[cc])(j, i) == -2) {
-                    if (!demosaic || grid_color(i, j, g0, r0) == cc)
-                        (*out[cc])(j, i) = mmin[cc];
-                }
+        for (int j = 0; j < width; j++) {
+            k = j + i * width;
+            // only operate on relevant color when isbayer
+            if (isbayer)
+                ccf = grid_color(i, j, g0, r0);
+            for (int cc = ccf; cc < 3; cc += cinc) {
+                (*out[cc])(k) = ((*out[cc])(k) == -1) ? mmax[cc] : (*out[cc])(k);
+                (*out[cc])(k) = ((*out[cc])(k) == -2) ? mmin[cc] : (*out[cc])(k);
             }
+    }
     // demosaic after merge
     if (demosaic){
         dht_interpolate(out[0], out[1], out[2]);
     }
     // apply color transformation
-    for (int j = 0; j < width * height; j++) {
+    float x,y,z;
+    for (int j = 0; j < NP; j++) {
         x = (*out[0])(j);
         y = (*out[1])(j);
         z = (*out[2])(j);
@@ -263,10 +299,10 @@ int linear_Response(pfs::Array2D *out[],
 
     VERBOSE_STR << "Maximum Value: " << mmax[0] << ", " << mmax[1] << ", " << mmax[2] << std::endl;
     VERBOSE_STR << "Exposure pixels skipped due to deghosting: " <<
-                (float) skipped_deghost * 100.f / (float) (width * height * N) << "%" << std::endl;
+                (float) skipped_deghost * 100.f / (float) (NP * N) << "%" << std::endl;
 
     if (under_pixels > 0) {
-        float perc = ceilf(100.0f * under_pixels / (width * height));
+        float perc = ceilf(100.0f * under_pixels / NP);
         VERBOSE_STR << "under-exposed pixels found in " << perc << "% of the image!" << endl;
     }
     return saturated_pixels;

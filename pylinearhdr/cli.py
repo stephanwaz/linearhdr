@@ -567,7 +567,7 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
         rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
         newheader.append(f"RGB2XYZ= {rgb2rgbs}")
     elif rgbrgb:
-        rgb2rgb = np.fromstring(rgbrgb).reshape(3, 3)
+        rgb2rgb = np.asarray([float(i) for i in rgbrgb.strip().split()]).reshape(3, 3)
         rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
         newheader.append(f"RGB2RGB= {rgb2rgbs}")
     else:
