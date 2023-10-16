@@ -158,6 +158,7 @@ def is_vignette_file(ctx, param, s):
         else:
             raise ValueError(f"{s} is not a file in current directory or {vignetting_path}")
 
+
 shared_run_opts = [
     click.option("-badpixels", callback=is_file_or_tup_int,
                                 help="file of bad pixels (rows: xpix ypix 0) where xpix is from left and ypix is "
@@ -190,67 +191,38 @@ shared_run_opts = [
                       "the luminance of the  target at the longest exposure time. this can be done with an "
                       "exponential trendline in excel (make sure set intercept=1), or with "
                       "scipy.optimize.curve_fit(lambda t,a: np.exp(a*t),  x,  y, p0=(-1e-8,))"),
-    click.option("-scale", default=1.0, help="calibration scale factor (applies to ISO, so do not use -s with linearhdr)"),
-    click.option("-cscale", callback=clk.split_float, help="color calibration scale factor (applies via header, same as linearhdr -k)"),
+    click.option("-scale", default=1.0,
+                 help="calibration scale factor (applies to ISO, so do not use -s with linearhdr)"),
+    click.option("-cscale", callback=clk.split_float,
+                 help="color calibration scale factor (applies via header, same as linearhdr -k)"),
     click.option("-nd", default=0.0, help="additional ND filter (applies to ISO, so do not use -s with linearhdr)"),
-    click.option("-saturation", "-saturation-offset", "-s", default=0.01, help="saturation offset, if white is not LinearityUpperMargin, this must be changed"),
-    click.option("-range", "-r", default=0.01, help="lower range of single raw exposure"),
-    click.option("--verbose/--no-verbose", default=False, help="passed to linearhdr"),
-    click.option("--interpfirst/--interpsecond", default=True, help="interpolate with rawconvert (uses linear) or interpolate after merge (uses DHT)"),
-    click.option("--rawgrid/--no-rawgrid", default=False, help="do not interpolate raw channels. forces -colorspace to 'raw' and ignores --interpfirst")
-]
-
-
-@main.command()
-@click.argument("imgs", callback=clk.are_files)
-@click.argument("crop", callback=clk.split_int)
-@click.option("-hdropts", default="", help="options to pass to linearhdr (put in qoutes)")
-@click.option("-sort", default="shutter", help="cane be image, aperture, shutter")
-@click.option("-target", type=float, help="reference value")
-@click.option("--header/--no-header", default=True, help="print column labels")
-@clk.shared_decs(shared_run_opts)
-@clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def calibrate(ctx, imgs, crop, badpixels=None, scale=1.0, nd=0.0, saturation=0.01, range=0.01, hdropts="",
-              black="AverageBlackLevel", white="AverageBlackLevel", cscale=None, shutterc=None,
-              colorspace='rad', fo=None, sort='shutter', target=None, header=True, xyzcam=None, verbose=False,
-              rawgrid=False, interpfirst=True, **kwargs):
-    """calibration routine, see README.rst
-
-    imgs: list of images
-    crop: help="<left> <upper> <width> <height>"
-    """
-    if verbose:
-        hdropts += " --verbose"
-    if rawgrid:
-        colorspace = 'raw'
-        hdropts += " -B"
-    elif not interpfirst:
-        hdropts += " -D"
-    colorspace = pl.process_colorspace_option(colorspace)
-    tiffs = pool_call(pl.calibrate_frame, imgs, *crop[0:4], hdropts, bad_pixels=badpixels, expandarg=False, black=black, pbar=False, shutterc=shutterc,
-                     white=white, colorspace=colorspace, fo=fo, scale=scale * 10**nd, cscale=cscale, saturation=saturation, r=range, xyzcam=xyzcam,
-                      rawgrid=rawgrid or (not interpfirst))
-    pl.report_calibrate(tiffs, sort=sort, target=target, header=header)
-
-
-make_list_opts = [
-     click.argument("imgs", callback=clk.are_files),
-     click.option("--shell/--no-shell", default=False,
-                   help="output shell file for use with stdin of linearhdr: bash output.sh | linearhdr"),
+    click.option("-saturation", "-saturation-offset", "-s", default=0.01,
+                 help="saturation offset, if white is not LinearityUpperMargin, this must be changed"),
+    click.option("-range", "-r", default=0.01,
+                 help="lower range of single raw exposure"),
+    click.option("--verbose/--no-verbose", default=False,
+                 help="passed to linearhdr"),
+    click.option("--interpfirst/--interpsecond", default=True,
+                 help="interpolate with rawconvert (uses linear) or interpolate after merge (uses DHT)"),
+    click.option("--rawgrid/--no-rawgrid", default=False,
+                 help="do not interpolate raw channels. forces -colorspace to 'raw' and ignores --interpfirst"),
+    click.argument("imgs", callback=clk.are_files),
+    click.option("--shell/--no-shell", default=False,
+                 help="output shell file for use with stdin of linearhdr: bash output.sh | linearhdr"),
     click.option("--fisheye/--no-fisheye", default=False,
                  help="apply fisheye_corr to 180 degree image (must be properly cropped and equiangular). "
                       "requires pcomb and RAYPATH"),
-     click.option("--overwrite/--no-overwrite", default=False,
-                   help="run rawconvert even if output file exists"),
-     click.option("-header-line", '-hl', multiple=True,
-                   help="lines to append to HDR header, e.g. LOCATION= 46.522833,6.580500"),
-     click.option("--correct/--no-correct", default=True,
-                   help="apply correction to nominal aperture and shutter speed values, use with linearhdr --exact"),
-     click.option("--listonly/--no-listonly", default=False,
-                   help="skip execution and just print metadata"),
-     click.option("-hdropts", default="", help="additional options to linearhdr (with callhdr, overrides -r -s)"),
-     click.option("-crop", callback=clk.split_int,
-                   help="crop tiff (left upper W H)"),
+    click.option("--overwrite/--no-overwrite", default=False,
+                 help="run rawconvert even if output file exists"),
+    click.option("-header-line", '-hl', multiple=True,
+                 help="lines to append to HDR header, e.g. LOCATION= 46.522833,6.580500"),
+    click.option("--correct/--no-correct", default=True,
+                 help="apply correction to nominal aperture and shutter speed values, use with linearhdr --exact"),
+    click.option("--listonly/--no-listonly", default=False,
+                 help="skip execution and just print metadata"),
+    click.option("-hdropts", default="", help="additional options to linearhdr (with callhdr, overrides -r -s)"),
+    click.option("-crop", callback=clk.split_int,
+                 help="crop tiff (left upper W H)"),
 ]
 
 
@@ -259,11 +231,15 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
                  black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
                  interpfirst=True, **kwargs):
     """make list routine, use to generate input to linearhdr"""
+    rawcopts = None
+    premult = np.array([1, 1, 1])
     if verbose:
         hdropts += " --verbose"
     if rawgrid:
         colorspace = 'raw'
         hdropts += " -B"
+    if colorspace == 'raw':
+        rawcopts = ""
     elif not interpfirst:
         hdropts += " -D"
     outf = sys.stdout
@@ -276,13 +252,20 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         outf = open(outfn, 'w')
         if not correct:
             hdropts += " --nominal"
-    tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, rawgrid=rawgrid or (not interpfirst),
-                     shutterc=shutterc, listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False, pbar=False)
     if xyzcam is None:
         xyzcam = pl.get_xyz_cam(imgs[0])
+    if rawcopts is None:
+        xyzcam = np.asarray(xyzcam).reshape(3, 3)
+        premult = 1/np.sum(xyzcam, axis=1)
+        rawcopts = '-r ' + " ".join([f"{i:.06f}" for i in premult]) + f" {premult[1]:.06f}"
+    xyzcam = xyzcam * premult[:, None]
+    tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, rawgrid=rawgrid or (not interpfirst),
+                     shutterc=shutterc, listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False, pbar=False, rawcopts=rawcopts)
     cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale)
     print(f"# pylinearhdr_VERSION= {pylinearhdr.__version__}", file=outf)
     print(f"# pylinearhdr " + " ".join(sys.argv[1:]), file=outf)
+    print(f"# XYZCAM= " + " ".join([f"{i:.08f}" for i in xyzcam.ravel()]), file=outf)
+    print(f"# CAM_PREMULTIPLIERS= " + " ".join([f"{i:.08f}" for i in premult.ravel()]), file=outf)
     print("# CAPDATE= {}".format(datetime.datetime.now().strftime("%Y:%m:%d %H:%M:%S")), file=outf)
     for h in header:
         print(h, file=outf)
@@ -312,7 +295,7 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
 
 
 @main.command()
-@clk.shared_decs(make_list_opts + shared_run_opts)
+@clk.shared_decs(shared_run_opts)
 @click.option("--callhdr/--no-callhdr", default=False, help="directly call linearhdr")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def makelist(ctx, imgs, **kwargs):
@@ -321,7 +304,7 @@ def makelist(ctx, imgs, **kwargs):
 
 
 @main.command()
-@clk.shared_decs(make_list_opts + shared_run_opts)
+@clk.shared_decs(shared_run_opts)
 @click.option("--clean/--no-clean", default=True, help="delete tiff files after linearhdr")
 @click.option("-vfile", callback=is_vignette_file, help="vignetting file, rows should be angle(degrees) factor(s) either one column"
                                                         "for luminance or 3 for RGB, apply in destination RGB space after lens "

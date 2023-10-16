@@ -43,8 +43,8 @@ def camera_raw_values(img):
     return imar
 
 
-def get_xyz_cam(img):
-    rawinfo = Popen(shlex.split(f"rawconvert -identify {img}"),
+def get_xyz_cam(img, opts=""):
+    rawinfo = Popen(shlex.split(f"rawconvert {opts} -identify {img}"),
                     stdout=PIPE).communicate()[0].decode(sys.stdin.encoding)
     a = rawinfo.rsplit("XYZ->CamRGB:", 1)[1].strip().split()[0:9]
     xyz_rgb = np.array([float(i) for i in a]).reshape(3, 3)
@@ -170,7 +170,8 @@ def process_dcraw_opt(val, img, callexif=True, avg=False):
 
 
 def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None, bad_pixels=None, rawgrid=False,
-                  black="PerChannelBlackLevel", white="LinearityUpperMargin", fo=None, shutterc=None, tiff=None):
+                  black="PerChannelBlackLevel", white="LinearityUpperMargin", fo=None, shutterc=None, tiff=None,
+                  rawcopts=''):
     correct = correct or fo or shutterc
     black = process_dcraw_opt(black, img, avg=True)
     white = process_dcraw_opt(white, img, avg=True)
@@ -188,7 +189,7 @@ def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None,
             cs += " -disinterp"
         else:
             cs += " -q 11"
-        Popen(shlex.split(f"rawconvert {cs} -Z {tiff} -k {black} -S {white} {img}")).communicate()
+        Popen(shlex.split(f"rawconvert {cs} -Z {tiff} -k {black} -S {white} {rawcopts} {img}")).communicate()
     rawinfo = info_from_exif(img, correct, fo=fo, shutterc=shutterc)
     return tiff, *rawinfo
 
@@ -257,30 +258,6 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None):
     return cam_rgb, header
 
 
-def calibrate_frame(img, u, l, w, h, opts, bad_pixels, black="PerChannelBlackLevel", xyzcam=None, cscale=None, shutterc=None,
-                    white="LinearityUpperMargin", colorspace='rad', fo=None, scale=1.0, saturation=0.01, r=0.01, rawgrid=False):
-    if xyzcam is None:
-        xyzcam = get_xyz_cam(img)
-    cam_rgb, header = cam_color_mtx(xyzcam, colorspace, cscale=cscale)
-    tiff = img + "_calibrate.tiff"
-    tiff, sh, ap, iso, _ = get_raw_frame(img, crop=(u,l, w, h), bad_pixels=bad_pixels, black=black, white=white,
-                                         tiff=tiff, fo=fo, shutterc=shutterc, rawgrid=rawgrid)
-    iso = iso/scale
-    txt = img + "_calibrate.txt"
-    f = open(txt, 'w')
-    for h in header:
-        print(h, file=f)
-    print(f"{tiff} {iso} {ap:.03f} {1/sh:.08f}", file=f)
-    f.close()
-    opts += f" -o {saturation} -r {r}"
-    f = Popen(shlex.split(f"linearhdr {opts} --exact --tsv {txt}"), stdout=PIPE)
-    vals = Popen(shlex.split("total -m"), stdin=f.stdout, stdout=PIPE).communicate()[0].split()
-    vals = [float(i) for i in vals] + [float(vals[-2]) + float(vals[-1])]
-    os.remove(tiff)
-    os.remove(txt)
-    return tiff, sh, ap, iso, vals
-
-
 def report(tiffs, s=False, l=False, scale=1, sat_w=0.99, sat_b=.01, outf=None):
     if outf is None:
         outf = sys.stdout
@@ -300,34 +277,6 @@ def report(tiffs, s=False, l=False, scale=1, sat_w=0.99, sat_b=.01, outf=None):
             print(f"pfsin {tiff} | pfstag --set 'ISO={iso/scale}' --set 'aperture={ap:.03f}' --set 'exposure_time={1/sh:.08f}'", file=outf)
         else:
             print(f"{tiff} {iso/scale} {ap:.03f} {1/sh:.08f}", file=outf)
-
-
-def report_calibrate(tiffs, sort='shutter', target=None, header=True):
-    avg = 0
-    div = 0
-    minv = 1e9
-    maxv = 0
-    sorti = dict(image=0, shutter=1, aperture=2)
-    si = sorti[sort]
-    if header:
-        if target:
-            print(f"image\tiso\taperture\texposure_time\tsat_red\tsat_green\tsat_blue\tred\tgreen\tblue\tlum\tfrac_above\tfrac_below\tfrac_oor\ttarget:{target}")
-        else:
-            print("image\tiso\taperture\texposure_time\tsat_red\tsat_green\tsat_blue\tred\tgreen\tblue\tlum\tfrac_above\tfrac_below\tfrac_oor")
-    tiffs = sorted(tiffs, key=lambda x: x[1])
-    for tiff, sh, ap, iso, rgb in sorted(tiffs, key=lambda x: x[si]):
-        if target:
-            print(f"{tiff}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04g}" for i in rgb]) + f"\t{rgb[6]/target:.04g}")
-        else:
-            print(f"{tiff}\t{iso}\t{ap:.02f}\t{1/sh:.10f}\t" + "\t".join([f"{i:.04g}" for i in rgb]))
-        if rgb[-2] == 0 and rgb[-1] == 0:
-            minv = min(minv, rgb[-4])
-            maxv = max(maxv, rgb[-4])
-            avg += rgb[-4]
-            div += 1
-    print("Average value:", avg/div, file=sys.stderr)
-    print("min-max for in range exposures:", minv, maxv, file=sys.stderr)
-    print("adjust -o and -r settings of linearhdr to change viable range", file=sys.stderr)
 
 
 def apply_vignetting_correction(img, vg, viewangle=180):
