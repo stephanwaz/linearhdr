@@ -238,10 +238,10 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
     if rawgrid:
         colorspace = 'raw'
         hdropts += " -B"
-    if colorspace == 'raw':
-        rawcopts = ""
     elif not interpfirst:
         hdropts += " -D"
+    if colorspace == 'raw':
+        rawcopts = ""
     outf = sys.stdout
     outfn = "<makelist.txt>"
     if listonly:

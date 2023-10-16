@@ -109,6 +109,8 @@ int linear_Response(pfs::Array2D *out[],
     int g0 = first_non_zero((*imgs[1])[0].yi);
     int r0 = first_non_zero_row((*imgs[0])[0].yi);
 
+    VERBOSE_STR << "1st green column: " << g0 << " 1st red row: " << r0 << std::endl;
+
     // number of exposures
     int N = imgs[0]->size();
 
