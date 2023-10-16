@@ -89,7 +89,7 @@ float get_exposure_compensationX(const Exposure &ex) {
 float get_weight(const double x, const double b = 25, const double m = 5){
     // w[i] = eG.exposure_time;
     // y\ =\ \frac{1}{1+e^{-b\cdot\min\left(1-x,x\right)+m}}
-    return 1 / (1+ std::exp(-b * min(1-x, x) + m));
+    return x / (1+ std::exp(-b * min(1-x, x) + m));
 }
 
 int linear_Response(pfs::Array2D *out[],
