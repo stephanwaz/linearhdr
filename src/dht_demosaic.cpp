@@ -65,16 +65,18 @@ static inline float calc_dist(float c1, float c2) {
     return c1 > c2 ? c1 / c2 : c2 / c1;
 }
 
+//because floating point input, algorithm needs a non-zero base value
+//this is added to the raw input but then subtracted at final copy
+//edit: better to pass non-zero values when that is the desired effect
+//this results in NAN when one channel in denominator is 0, wiping out any pixels
+//take information from a zero pixel.
+static const float FLOOR = 0.0;
+
 struct DHT {
     int nr_height, nr_width, iwidth, iheight; //SW
     int r0, g0;  //SW to locate bayer grid after potential cropping
     static const int nr_topmargin = 4, nr_leftmargin = 4;
-    //because floating point input, algorithm needs a non-zero base value
-    //this is added to the raw input but then subtracted at final copy
-    //edit: better to pass non-zero values when that is the desired effect
-    //this results in NAN when one channel in denominator is 0, wiping out any pixels
-    //take information from a zero pixel.
-    static const float FLOOR = 0.0;
+
     float (*nraw)[3];
     float channel_maximum[3]; //SW change to float
     float channel_minimum[3];
@@ -334,9 +336,10 @@ int DHT::COLOR(int i, int j) {
 int first_non_zero_row(pfs::Array2D *X) {
     for (int i = 0; i < X->getRows(); i++) {
         for (int j = 0; j < X->getCols(); j++)
-            if ((*X)(j, i) > 0)
+            if ((*X)(j, i) > 1e-6)
                 return i % 2;
     }
+    return 0;
 }
 
 // assumes X is green channel
@@ -345,9 +348,10 @@ int first_non_zero_row(pfs::Array2D *X) {
 int first_non_zero(pfs::Array2D *X) {
     for (int i = 0; i < X->getRows(); i++) {
         for (int j = 0; j < X->getCols(); j++)
-            if ((*X)(j, i) > 0)
+            if ((*X)(j, i) > 1e-6)
                 return (j + (i % 2)) % 2;
     }
+    return 0;
 }
 
 // class initialization

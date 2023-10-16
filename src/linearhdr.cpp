@@ -89,7 +89,7 @@ float get_exposure_compensationX(const Exposure &ex) {
 float get_weight(const double x, const double b = 25, const double m = 5){
     // w[i] = eG.exposure_time;
     // y\ =\ \frac{1}{1+e^{-b\cdot\min\left(1-x,x\right)+m}}
-    return x / (1+ std::exp(-b * min(1-x, x) + m));
+    return 1 / (1+ std::exp(-b * min(1-x, x) + m));
 }
 
 int linear_Response(pfs::Array2D *out[],
@@ -106,8 +106,8 @@ int linear_Response(pfs::Array2D *out[],
                    const bool demosaic){
 
     isbayer = isbayer or demosaic;
-    int g0 = first_non_zero(out[1]);
-    int r0 = first_non_zero_row(out[0]);
+    int g0 = first_non_zero((*imgs[1])[0].yi);
+    int r0 = first_non_zero_row((*imgs[0])[0].yi);
 
     // number of exposures
     int N = imgs[0]->size();
@@ -138,13 +138,13 @@ int linear_Response(pfs::Array2D *out[],
     if (isbayer)
         cinc = 3;
 
-    int mi = 0;
-    int mj = 0;
-
     // loop over each pixel
     for (int i = 0; i < height; i++) {
         for (int j = 0; j < width; j++) {
             k = j + i * width;
+            for (int cc = 0; cc < 3; cc++) {
+                (*out[cc])(k) = 0;
+            }
 
             float X[3][N];
             float w[N];
