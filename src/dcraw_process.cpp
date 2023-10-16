@@ -251,7 +251,7 @@ int LibRaw::dcraw_process(void)
     if (callbacks.pre_converttorgb_cb)
       (callbacks.pre_converttorgb_cb)(this);
 
-    convert_to_rgb();
+//    convert_to_rgb();
     SET_PROC_FLAG(LIBRAW_PROGRESS_CONVERT_RGB);
 
     if (callbacks.post_converttorgb_cb)

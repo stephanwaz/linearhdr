@@ -91,7 +91,7 @@ void usage(const char *prog)
          "-T        Write TIFF instead of PPM (default)\n"
          "-p        Write PPM instead of TIFF\n"
          "-G        Use green_matching() filter\n"
-         "-r <r g b g> Set custom white balance"
+         "-r <r g b g> Set custom white balance (used to normalize cam_xyz matrix)"
          "-B <x y w h> use cropbox\n"
          "-Z <suf>  Output filename generation rules\n"
          "          .suf => append .suf to input name, keeping existing suffix "
@@ -222,14 +222,15 @@ int main(int argc, char *argv[])
   LibRaw RawProcessor;
   int i, arg, c, ret;
   int identify = 0;
+  bool auto_mult = true;
   char opm, opt, *cp, *sp;
   char *outext = NULL;
 #ifdef OUT
 #undef OUT
 #endif
 #define OUT RawProcessor.imgdata.params
-  OUT.user_mul[1] = OUT.user_mul[3] = 1;
-  OUT.user_mul[0] = OUT.user_mul[2] = 2;
+  OUT.user_mul[1] = OUT.user_mul[3] = 0;
+  OUT.user_mul[0] = OUT.user_mul[2] = 0;
   OUT.output_tiff = 1;
   argv[argc] = (char *)"";
   for (arg = 1; (((opm = argv[arg][0]) - 2) | 2) == '+';)
@@ -264,6 +265,7 @@ int main(int argc, char *argv[])
     case 'r':
       for (c = 0; c < 4; c++)
         OUT.user_mul[c] = (float)atof(argv[arg++]);
+      auto_mult = false;
       break;
     case 'q':
         OUT.user_qual = atoi(argv[arg++]);
@@ -319,12 +321,11 @@ int main(int argc, char *argv[])
 #define S RawProcessor.imgdata.sizes
 #define C RawProcessor.imgdata.color
 #define T RawProcessor.imgdata.thumbnail
-#define P2 RawProcessor.imgdata.other
 
 
-  if (verbosity > 1)
-    RawProcessor.set_progress_handler(my_progress_callback,
-                                      (void *)"Sample data passed");
+if (verbosity > 1)
+RawProcessor.set_progress_handler(my_progress_callback,
+                                  (void *)"Sample data passed");
 #ifdef LIBRAW_USE_OPENMP
   if (verbosity)
     printf("Using %d threads\n", omp_get_max_threads());
@@ -342,7 +343,14 @@ int main(int argc, char *argv[])
 
     ret = RawProcessor.open_file(argv[arg]);
 
+      if (auto_mult) {
+          for (int r = 0; r < P1.colors; r++)
+              OUT.user_mul[r] = 1 / (C.cam_xyz[r][0] + C.cam_xyz[r][1] + C.cam_xyz[r][2]);
+          OUT.user_mul[3] = OUT.user_mul[1];
+      }
+
       if (identify){
+          fprintf(stdout, "RGBG multipliers:\t%6.4f\t%6.4f\t%6.4f\t%6.4f\n", OUT.user_mul[0], OUT.user_mul[1], OUT.user_mul[2], OUT.user_mul[3]);
           fprintf(stdout, "XYZ->CamRGB:");
           for (int r = 0; r < P1.colors; r++)
               fprintf(stdout, "\t%6.4f\t%6.4f\t%6.4f", C.cam_xyz[r][0] * OUT.user_mul[r], C.cam_xyz[r][1] * OUT.user_mul[r], C.cam_xyz[r][2] * OUT.user_mul[r]);
@@ -353,12 +361,12 @@ int main(int argc, char *argv[])
           return 0;
       }
 
-      if (ret != LIBRAW_SUCCESS)
-      {
-        fprintf(stderr, "Cannot open %s: %s\n", argv[arg],
-                libraw_strerror(ret));
-        continue; // no recycle b/c open_file will recycle itself
-      }
+    if (ret != LIBRAW_SUCCESS)
+    {
+    fprintf(stderr, "Cannot open %s: %s\n", argv[arg],
+            libraw_strerror(ret));
+    continue; // no recycle b/c open_file will recycle itself
+    }
 
 
     if ((ret = RawProcessor.unpack()) != LIBRAW_SUCCESS)
