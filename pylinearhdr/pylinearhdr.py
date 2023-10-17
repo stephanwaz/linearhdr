@@ -169,27 +169,31 @@ def process_dcraw_opt(val, img, callexif=True, avg=False):
     raise ValueError(f"Bad option given '{val}' could not be processed as a exiftool parameter")
 
 
-def get_raw_frame(img, correct=True, overwrite=False, listonly=False, crop=None, bad_pixels=None, rawgrid=False,
-                  black="PerChannelBlackLevel", white="LinearityUpperMargin", fo=None, shutterc=None, tiff=None,
-                  rawcopts=''):
-    correct = correct or fo or shutterc
+def rawconvert_opts(img, crop=None, bad_pixels=None, rawgrid=False, black="PerChannelBlackLevel",
+                    white="LinearityUpperMargin", rawcopts=''):
     black = process_dcraw_opt(black, img, avg=True)
     white = process_dcraw_opt(white, img, avg=True)
+    cs = ""
+    if crop is not None:
+        cs = "-B {} {} {} {}".format(*crop)
+    if bad_pixels is not None:
+        cs += f" -P {bad_pixels}"
+    if rawgrid:
+        cs += " -disinterp"
+    else:
+        cs += " -q 11"
+    return f"rawconvert {cs} -k {black} -S {white} {rawcopts}"
+
+
+def get_raw_frame(img, correct=True, overwrite=False, listonly=False, rawconvertcom="rawconvert",
+                  fo=None, shutterc=None, tiff=None):
+    correct = correct or fo or shutterc
     if tiff is None:
         tiff = img + ".tiff"
     if listonly:
         tiff = img
     elif overwrite or not os.path.isfile(tiff):
-        cs = ""
-        if crop is not None:
-            cs = "-B {} {} {} {}".format(*crop)
-        if bad_pixels is not None:
-            cs += f" -P {bad_pixels}"
-        if rawgrid:
-            cs += " -disinterp"
-        else:
-            cs += " -q 11"
-        Popen(shlex.split(f"rawconvert {cs} -Z {tiff} -k {black} -S {white} {rawcopts} {img}")).communicate()
+        Popen(shlex.split(f"{rawconvertcom} -Z {tiff} {img}")).communicate()
     rawinfo = info_from_exif(img, correct, fo=fo, shutterc=shutterc)
     return tiff, *rawinfo
 

@@ -220,6 +220,10 @@ shared_run_opts = [
                  help="apply correction to nominal aperture and shutter speed values, use with linearhdr --exact"),
     click.option("--listonly/--no-listonly", default=False,
                  help="skip execution and just print metadata"),
+    click.option("--premult/--no-premult", default=False,
+                 help="normalize xyzcam matrix and premultiply raw channels to compensate. This will correct any"
+                      " colorshift near out of bounds values at the expense of offsetting the valid raw camera range. "
+                      "If the HDR sequence is safely in range, set this to false, otherwise true may yield better results"),
     click.option("-hdropts", default="", help="additional options to linearhdr (with callhdr, overrides -r -s)"),
     click.option("-crop", callback=clk.split_int,
                  help="crop tiff (left upper W H)"),
@@ -229,10 +233,9 @@ shared_run_opts = [
 def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
                  crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
                  black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
-                 interpfirst=True, **kwargs):
+                 interpfirst=True, premult=False, **kwargs):
     """make list routine, use to generate input to linearhdr"""
-    rawcopts = None
-    premult = np.array([1, 1, 1])
+    multipliers = np.array([1, 1, 1])
     if verbose:
         hdropts += " --verbose"
     if rawgrid:
@@ -240,8 +243,6 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         hdropts += " -B"
     elif not interpfirst:
         hdropts += " -D"
-    if colorspace == 'raw':
-        rawcopts = ""
     outf = sys.stdout
     outfn = "<makelist.txt>"
     if listonly:
@@ -254,18 +255,22 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
             hdropts += " --nominal"
     if xyzcam is None:
         xyzcam = pl.get_xyz_cam(imgs[0])
-    if rawcopts is None:
-        xyzcam = np.asarray(xyzcam).reshape(3, 3)
-        premult = 1/np.sum(xyzcam, axis=1)
-        rawcopts = '-r ' + " ".join([f"{i:.06f}" for i in premult]) + f" {premult[1]:.06f}"
-    xyzcam = xyzcam * premult[:, None]
-    tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, black=black, white=white, fo=fo, rawgrid=rawgrid or (not interpfirst),
-                     shutterc=shutterc, listonly=listonly, crop=crop, bad_pixels=badpixels, expandarg=False, pbar=False, rawcopts=rawcopts)
+    xyzcam = np.asarray(xyzcam).reshape(3, 3)
+    if premult:
+        rowsum = np.sum(xyzcam, axis=1)
+        multipliers = np.max(rowsum)/rowsum
+    rawcopts = '-r ' + " ".join([f"{i:.06f}" for i in multipliers]) + f" {multipliers[1]:.06f}"
+    xyzcam = xyzcam * multipliers[:, None]
+    rawconvertcom = pl.rawconvert_opts(imgs[0], crop=crop, bad_pixels=badpixels, rawgrid=rawgrid or (not interpfirst),
+                                       black=black, white=white, rawcopts=rawcopts)
+    tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, rawconvertcom=rawconvertcom, fo=fo,
+                     shutterc=shutterc, listonly=listonly, expandarg=False, pbar=False)
     cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale)
-    print(f"# pylinearhdr_VERSION= {pylinearhdr.__version__}", file=outf)
     print(f"# pylinearhdr " + " ".join(sys.argv[1:]), file=outf)
+    print(f"# pylinearhdr_VERSION= {pylinearhdr.__version__}", file=outf)
+    print(f"# {rawconvertcom}", file=outf)
     print(f"# XYZCAM= " + " ".join([f"{i:.08f}" for i in xyzcam.ravel()]), file=outf)
-    print(f"# CAM_PREMULTIPLIERS= " + " ".join([f"{i:.08f}" for i in premult.ravel()]), file=outf)
+    print(f"# CAM_PREMULTIPLIERS= " + " ".join([f"{i:.08f}" for i in multipliers.ravel()]), file=outf)
     print("# CAPDATE= {}".format(datetime.datetime.now().strftime("%Y:%m:%d %H:%M:%S")), file=outf)
     for h in header:
         print(h, file=outf)
