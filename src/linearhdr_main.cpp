@@ -148,7 +148,7 @@ void printHelp() {
                     "default correction.\n\n");
 }
 
-void pfshdrraw(int argc, char *argv[]) {
+void linearhdr_main(int argc, char *argv[]) {
 
     std::stringstream header;
     header << PROG_NAME << "_VERSION= " << PROG_VERSION << endl;
@@ -206,7 +206,6 @@ void pfshdrraw(int argc, char *argv[]) {
     std::stringstream k;
     int optionIndex = 0;
     while ((c = getopt_long(argc, argv, "hnevuBDRd:s:r:o:m:x:k:", cmdLineOptions, &optionIndex)) != -1) {
-
         switch (c) {
             /* help */
             case 'h':
@@ -280,7 +279,6 @@ void pfshdrraw(int argc, char *argv[]) {
 
     std::ifstream infile(argv[optind]);
 
-
     int frame_no = 0;
     int width = 0;
     int height = 0;
@@ -297,6 +295,7 @@ void pfshdrraw(int argc, char *argv[]) {
     ExposureList imgsB;
 
 
+    // read through specification file loading header information and image frames
     while (true) {
         pmax = 0;
         pfs::Frame *iframe = nullptr;
@@ -361,6 +360,7 @@ void pfshdrraw(int argc, char *argv[]) {
         height = Y->getRows();
         size = width * height;
 
+        // for direct standard output (no merging)
         if (dataonly){
             fmax = info.factor;
             float r, g, b;
@@ -438,7 +438,6 @@ void pfshdrraw(int argc, char *argv[]) {
         VERBOSE_STR << "Warning: some pixels out of range..."  <<  endl;
     }
 
-
     // create channels for output
     pfs::Frame *frame = pfsio.createFrame(width, height);
 
@@ -455,12 +454,13 @@ void pfshdrraw(int argc, char *argv[]) {
     const ExposureList *exposures[] = {&imgsR, &imgsG, &imgsB};
 
     VERBOSE_STR << "applying response..." << endl;
-    sp = linear_Response(RGB_out, exposures, opt_saturation_offset_perc,
+    sp = linear_response(RGB_out, exposures, opt_saturation_offset_perc,
                          opt_black_offset_perc, opt_deghosting,
                          opt_scale, vlambda, rgb_corr, oor_high, oor_low, isbayer, demosaic);
 
     if (sp > 0) {
         float perc = ceilf(100.0f * sp / size);
+        // this one might be important, so always report saturated pixels regardless of --verbose
         std::cerr << PROG_NAME << ": " << "saturated pixels found in " << perc << "% (" << sp
                   << " pixels) of the image!" << endl;
     }
@@ -487,7 +487,7 @@ void pfshdrraw(int argc, char *argv[]) {
 
 int main(int argc, char *argv[]) {
     try {
-        pfshdrraw(argc, argv);
+        linearhdr_main(argc, argv);
     }
 
     catch (pfs::Exception ex) {

@@ -83,7 +83,7 @@ public:
 typedef std::vector<Exposure> ExposureList;
 
 
-int linear_Response(pfs::Array2D *rgb_out[],
+int linear_response(pfs::Array2D *rgb_out[],
                     const ExposureList *imgs[],
                     const float opt_saturation_offset,
                     const float opt_black_offset,
