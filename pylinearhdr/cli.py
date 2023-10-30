@@ -233,8 +233,12 @@ shared_run_opts = [
 def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
                  crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
                  black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
-                 interpfirst=True, premult=False, **kwargs):
+                 interpfirst=True, premult=False, header_line=None, **kwargs):
     """make list routine, use to generate input to linearhdr"""
+    if header_line is None:
+        header_line = []
+    else:
+        header_line = list(header_line)
     multipliers = np.array([1, 1, 1])
     if verbose:
         hdropts += " --verbose"
@@ -266,14 +270,18 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
     tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, rawconvertcom=rawconvertcom, fo=fo,
                      shutterc=shutterc, listonly=listonly, expandarg=False, pbar=False)
     cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale)
-    print(f"# pylinearhdr " + " ".join(sys.argv[1:]), file=outf)
+    # print(f"# pylinearhdr " + " ".join(sys.argv[1:]), file=outf)
     print(f"# pylinearhdr_VERSION= {pylinearhdr.__version__}", file=outf)
     print(f"# {rawconvertcom}", file=outf)
     print(f"# XYZCAM= " + " ".join([f"{i:.08f}" for i in xyzcam.ravel()]), file=outf)
     print(f"# CAM_PREMULTIPLIERS= " + " ".join([f"{i:.08f}" for i in multipliers.ravel()]), file=outf)
     print("# CAPDATE= {}".format(datetime.datetime.now().strftime("%Y:%m:%d %H:%M:%S")), file=outf)
+    rawstring = " ".join(imgs[0:1] + [i.rsplit("/", 1)[-1] for i in imgs[1:]])
+    print(f"# RAW_IMAGES= {rawstring}", file=outf)
     for h in header:
         print(h, file=outf)
+    for h in header_line:
+        print(f"# {h}", file=outf)
     pl.report(tiffs, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
 
     command = [f"linearhdr -r {range} -o {saturation} {hdropts} {outfn}"]
@@ -344,13 +352,20 @@ def run(ctx, imgs, **kwargs):
               help="by default the imgh will be used in the UL and LR quadrants, flip=True will use imgh UR and LL")
 @click.option("-envmap",
               help="additionally save an hdr file suitable for use as an environment map, source information is in the header")
+@click.option("-margin", default=20,
+              help="pixel margin beyond 180 degrees in all input images, will crop and reproject final output")
 @click.option("-check",
               help="write out masks and other intermediate data (give as prefix)")
+@click.option("--align/--no-align", default=True,
+              help="align H/V images and crop by margin (aligns H->V)")
+@click.option("--fisheye/--no-fisheye", default=True,
+              help="after alignment/crop reproject all inputs to angular fisheye")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-05, bw=2.0, flip=False, envmap=None, sunloc=None, check=None,
-               **kwargs):
-    """merge set of three images with horizontal, vertical and no shadow band all images are assumed to be 180 degree
-    angular fisheye.
+def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-05, bw=2.0,
+               envmap=None, sunloc=None, check=None, margin=20, align=True, fisheye=True, **kwargs):
+    """merge set of three images with horizontal, vertical and no shadow band all images are assumed
+    to be equisolid fisheye with an extra 'margin' around 180
+    to allow for H/V image alignment (unless align/fisheye are false.
 
     imgh: hdr with horizontal aligned shadowband
     imgv: hdr with veritcal aligned shadowband
@@ -358,45 +373,48 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
 
     to recover environment map (outputs into southern hemisphere:
 
-        getinfo testmap.hdr | grep SOURCE= | sed -E 's/[[:blank:]]*[A-Z]+SOURCE=[[:blank:]]*//g' > test.rad
+        getinfo testmap.hdr | grep SOURCE= | sed -E 's/[[:blank:]]*[A-Z]+SOURCE=[[:blank:]]*//g' | xform > test.rad
 
     or to rotate to west (for example):
 
         getinfo testmap.hdr | grep SOURCE= | sed -E 's/[[:blank:]]*[A-Z]+SOURCE=[[:blank:]]*//g' | xform -rz 90 > test.rad
 
     """
-    if flip:
-        rov = -rov
-        roh = -roh
+    sbobt = (f"SHADOWBAND= roh:{roh:.03f} rov:{rov:.03f} sfov:{sfov:.03f} srcsize:{srcsize:.04f} bw:{bw:.04f} "
+             f"align:{align} fisheye:{fisheye}")
     hdata, hh = io.hdr2carray(imgh, header=True)
     vdata, hv = io.hdr2carray(imgv, header=True)
     sdata, hs = io.hdr2carray(imgn, header=True)
-    blended, skyonly, source = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw, flip=flip,
+    if align:
+        if margin < 1:
+            t = slice(None, None)
+            margin = 0
+        else:
+            t = slice(margin, -margin)
+        xo, yo = sb.align_images(hdata[0, t, t], vdata[0, t, t])
+        if np.sum(np.abs((xo, yo))) > 0:
+            sdata = sdata[:, t, t]
+            vdata = vdata[:, t, t]
+            xt = slice(max(0, margin + xo), min(hdata.shape[1], xo + hdata.shape[1] - margin))
+            yt = slice(max(0, margin + yo), min(hdata.shape[2], yo + hdata.shape[2] - margin))
+            xt2 = slice(0, xt.stop-xt.start)
+            yt2 = slice(0, yt.stop-yt.start)
+            hdata2 = np.zeros_like(sdata)
+            hdata2[:, xt2, yt2] = hdata[:, xt, yt]
+            hdata = hdata2
+            hh.append(f"\tSHADOWBAND_IMAGE_ALIGN= {xo} {yo}")
+    if fisheye:
+        hdata, vdata, sdata = pool_call(imagetools.array_solid2ang, [hdata, vdata, sdata], expandarg=False, returnvm=False, pbar=False)
+    blended, skyonly, source = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw,
                                              envmap=envmap, sunloc=sunloc, check=check)
     vm = ViewMapper((0.0, -1.0, 0.0), viewangle=180)
-    header = []
-    if vm is not None:
-        header = [vm.header()]
-    header += hh + hv + hs
-    io.carray2hdr(blended, outf, header)
+    header = [sbobt] + hh + hv + hs + [vm.header()]
+    io.carray2hdr(blended, outf, header, clean=True)
     if skyonly is not None:
-        print(source)
         srcsize = (source[3] / np.pi) ** .5 * 360/np.pi
         header.append("SOLARSOURCE= " + "void light sun 0 0 3 {} {} {} sun source solar 0 0 4 {} {} {} {}".format(*source[4], *source[0:3], srcsize))
         header.append("SKYSOURCE= " + "void colorpict imgfunc 9 red green blue {} fisheye.cal fish_u fish_v -rz 180 0 0 imgfunc glow imgglow 0 0 4 1 1 1 0 imgglow source sky 0 0 4 0 -1 0 180".format(envmap))
-        io.carray2hdr(skyonly, envmap, header)
-    # if envmap:
-    #     radout = outf.rsplit(".", 1)[0] + ".rad"
-    #     f = open(radout, 'w')
-    #     srcrad = (srcsize/np.pi)**.5 * 180/np.pi * 2
-    #     f.write("void light sun 0 0 3 {} {} {}\n".format(*blended[1][-1]))
-    #     f.write("sun source solar 0 0 4 {} {} {} {}\n\n".format(*blended[1][0:3], srcrad))
-    #     f.write(f"void colorpict imgfunc\n7 red green blue {outf} fisheye.cal fish_u fish_v\n0 0\n")
-    #     f.write("imgfunc glow imgglow 0 0 4 1 1 1 0\n")
-    #     f.write("imgglow source sky 0 0 4 0 1 0 180\n")
-    #     io.carray2hdr(blended[0], outf, header)
-    # else:
-    #     io.carray2hdr(blended, outf, header)
+        io.carray2hdr(skyonly, envmap, header, clean=True)
 
 
 @main.command()
@@ -524,7 +542,7 @@ def vignette(ctx, img, vfile=None, **kwargs):
     else:
         vg = np.loadtxt(vfile)
         imgv = pl.apply_vignetting_correction(img, vg)
-    io.array2hdr(imgv, None, header=[f"VIGNETTING_CORRECTION= {vfile}"] + header)
+    io.array2hdr(imgv, None, header=[f"VIGNETTING_CORRECTION= {vfile}"] + header, clean=True)
 
 
 @main.command()
@@ -544,51 +562,16 @@ def vignette(ctx, img, vfile=None, **kwargs):
 def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=None, **kwargs):
     """apply color primary conversion
     """
-    newheader = []
-    if inp in ["xyz", "yxy"]:
-        inp2xyz = np.eye(3)
-    else:
-        inp2xyz, _, _ = pl.str_primaries_2_mtx(inp, xyzrgb)
-
-    if outp in ["xyz", "yxy"]:
-        rgb2rgb = inp2xyz
-        rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
-        newheader.append(f"RGB2XYZ= {rgb2rgbs}")
-    elif rgbrgb:
-        rgb2rgb = np.asarray([float(i) for i in rgbrgb.strip().split()]).reshape(3, 3)
-        rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
-        newheader.append(f"RGB2RGB= {rgb2rgbs}")
-    else:
-        orgb2xyz, ps, ws = pl.str_primaries_2_mtx(outp, oxyzrgb)
-        rgb2rgb = np.linalg.inv(orgb2xyz) @ inp2xyz
-        ps = " ".join([f"{i:.04f}" for i in ps])
-        ws = " ".join([f"{i:.04f}" for i in ws])
-        ls = " ".join([f"{i:.08f}" for i in orgb2xyz[1]])
-        newheader += [f"TargetPrimaries= {ps}",
-                      f"TargetWhitePoint= {ws}",
-                      f"LuminanceRGB= {ls}"]
-        rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
-        newheader.append(f"RGB2RGB= {rgb2rgbs}")
     if type(img) == str:
         imgd, header = io.hdr2carray(img, header=True)
-        if inp == "yxy":
-            dy = imgd[0]
-            dx = imgd[0]*imgd[1]/imgd[2]
-            dz = (1-imgd[1]-imgd[2])*imgd[0]/imgd[2]
-            imgd = np.stack((dx, dy, dz))
-        rgb = np.einsum('ij,jkl->ikl', rgb2rgb, imgd)
-        if outp == "yxy":
-            dY = rgb[1]
-            sxyz = np.sum(rgb, axis=0)
-            dx = rgb[0]/sxyz
-            dy = rgb[1]/sxyz
-            rgb = np.stack((dY, dx, dy))
         try:
             header += [imagetools.hdr2vm(img).header()]
         except AttributeError:
             pass
-        io.array2hdr(rgb, None, header=newheader + header)
+        rgb, outheader = pl.color_convert_img(imgd, header, inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb)
+        io.array2hdr(rgb, None, header=outheader, clean=True)
     else:
+        rgb2rgb, _ = pl.prep_color_transform(inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb)
         if inp == "yxy":
             dy = img[:, 0]
             dx = img[:, 0]*img[:, 1]/img[:, 2]

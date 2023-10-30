@@ -130,6 +130,11 @@ void printHelp() {
                     "\t\toverriden by RGBcalibration in header line applies to output colorspace (after Camera2RGB in header line)\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
                     "\t\tuse linearhdr_calibrate to calculate\n"
+                    "\t[--efc, -C '<val> <val> <val> <val>']: electronic front curtain shutter correction, give as m a b c\n"
+                    "\t\t to correct on image height according to the function: y = 1/((x/c+a*t)/(1+a*t))^b where t is\n"
+                    "\t\t the (mechanical shutter) corrected exposure time. 'm' is the maximum exposure time to which these coefficients apply.\n"
+                    "\tgive multiple times, starting with the shortest maximum time, to apply up to three ranges of efsc.\n"
+                    "\t Note that if three sets are given, the last coeffs will apply to all exposure times regardless of 'm'\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
                     "\t[--bayer, -B]: expect mosaic input (rawconvert --disinterp) ignores color correction in exposure_list header\n"
                     "\t[--debayer, -D]: interpolate hdr output, overrides --bayer, but expects same input (rawconvert --disinterp)\n"
@@ -179,7 +184,11 @@ void linearhdr_main(int argc, char *argv[]) {
                             {0.0, 0.0, 1.0}};
     float vlambda[3] = {0.333333, 0.333334, 0.333333};
     float rgbcal[3] = {1.0, 1.0, 1.0};
-
+    float efc[3][3] = {{0.0, 0.0, 0.0},
+                       {0.0, 0.0, 0.0},
+                       {0.0, 0.0, 0.0}};
+    float efcr[3] = {100.0, 100.0, 100.0};
+    int efci = 0;
     /* helper */
     int c;
 
@@ -198,14 +207,15 @@ void linearhdr_main(int argc, char *argv[]) {
             { "range", required_argument, nullptr, 'r' },
             { "scale", required_argument, nullptr, 's' },
             { "rgbs", required_argument, nullptr, 'k' },
+            { "efc", required_argument, nullptr, 'C' },
             { "oor-low", required_argument, nullptr, 'm' },
             { "oor-high", required_argument, nullptr, 'x' },
             {nullptr, 0,                         nullptr, 0}
     };
 
-    std::stringstream k;
+    std::stringstream k; //to read in multivalue arguments
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevuBDRd:s:r:o:m:x:k:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevuBDRd:s:r:o:m:x:k:C:", cmdLineOptions, &optionIndex)) != -1) {
         switch (c) {
             /* help */
             case 'h':
@@ -250,8 +260,17 @@ void linearhdr_main(int argc, char *argv[]) {
                     throw pfs::Exception("scale must be positive");
                 break;
             case 'k':
+                k.str("");
+                k.clear();
                 k << optarg;
                 k >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
+                break;
+            case 'C':
+                k.str("");
+                k.clear();
+                k << optarg;
+                k >> efcr[efci] >> efc[efci][0] >> efc[efci][1] >> efc[efci][2];
+                efci++;
                 break;
             case 'd':
                 opt_deghosting = atof(optarg);
@@ -391,12 +410,25 @@ void linearhdr_main(int argc, char *argv[]) {
             if (eR.yi == nullptr || eG.yi == nullptr || eB.yi == nullptr)
                 throw pfs::Exception("could not allocate memory for source exposure");
 
-            for (int i = 0; i < size; i++) {
-
-                (*eR.yi)(i) = (*X)(i);
-                (*eG.yi)(i) = (*Y)(i);
-                (*eB.yi)(i) = (*Z)(i);
-                pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
+            // choose right efc coefficients
+            for (int i = 0; i < 3; i++) {
+                efci = i;
+                if (info.etime < efcr[i])
+                    break;
+            }
+            int s;
+            float efcc = 1.0;
+            for (int i = 0; i < height; i++)
+                for (int j = 0; j < width; j++) {
+                    s = j + i * width;
+                    // apply electronic front curtain shutter correction
+                    if (efc[efci][0] > 0){
+                        efcc = 1/pow(((height-i) / efc[efci][2] + efc[efci][0] * info.etime)/(1 + efc[efci][0] * info.etime), efc[efci][1]);
+                    }
+                    (*eR.yi)(s) = (*X)(s) * efcc;
+                    (*eG.yi)(s) = (*Y)(s) * efcc;
+                    (*eB.yi)(s) = (*Z)(s) * efcc;
+                    pmax = max((*X)(s), (*Y)(s), (*Z)(s), pmax);
             }
 
             // add to exposures list
@@ -415,15 +447,12 @@ void linearhdr_main(int argc, char *argv[]) {
         oorange = oorange && (pmax > 1 - opt_saturation_offset_perc);
         pfsio.freeFrame(iframe);
     }
-//    VERBOSE_STR << rgbcal[0] << " " << rgbcal[1] << " " << rgbcal[2] << endl;
+
     for (int i = 0; i < 3; i++){
         for (int j = 0; j < 3; j++) {
             rgb_corr[i][j] = rgb_corr[i][j] * rgbcal[i];
         }
     }
-//    VERBOSE_STR << rgb_corr[0][0] << " " << rgb_corr[0][1] << " " << rgb_corr[0][2] << endl;
-//    VERBOSE_STR << rgb_corr[1][0] << " " << rgb_corr[1][1] << " " << rgb_corr[1][2] << endl;
-//    VERBOSE_STR << rgb_corr[2][0] << " " << rgb_corr[2][1] << " " << rgb_corr[2][2] << endl;
 
     if (dataonly)
         return;

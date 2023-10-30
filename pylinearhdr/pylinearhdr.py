@@ -311,3 +311,48 @@ def str_primaries_2_mtx(inp, mtx=None):
         rgb2xyz = pw_mtx(inp[0:6], inp[6:8])
         ps, ws = (inp[0:6], inp[6:8])
     return rgb2xyz, ps, ws
+
+
+def prep_color_transform(inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb=None):
+    newheader = []
+    if inp in ["xyz", "yxy"]:
+        inp2xyz = np.eye(3)
+    else:
+        inp2xyz, _, _ = str_primaries_2_mtx(inp, xyzrgb)
+    if outp in ["xyz", "yxy"]:
+        rgb2rgb = inp2xyz
+        rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
+        newheader.append(f"RGB2XYZ= {rgb2rgbs}")
+    elif rgbrgb:
+        rgb2rgb = np.asarray([float(i) for i in rgbrgb.strip().split()]).reshape(3, 3)
+        rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
+        newheader.append(f"RGB2RGB= {rgb2rgbs}")
+    else:
+        orgb2xyz, ps, ws = str_primaries_2_mtx(outp, oxyzrgb)
+        rgb2rgb = np.linalg.inv(orgb2xyz) @ inp2xyz
+        ps = " ".join([f"{i:.04f}" for i in ps])
+        ws = " ".join([f"{i:.04f}" for i in ws])
+        ls = " ".join([f"{i:.08f}" for i in orgb2xyz[1]])
+        newheader += [f"TargetPrimaries= {ps}",
+                      f"TargetWhitePoint= {ws}",
+                      f"LuminanceRGB= {ls}"]
+        rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
+        newheader.append(f"RGB2RGB= {rgb2rgbs}")
+    return rgb2rgb, newheader
+
+
+def color_convert_img(imgd, header, inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb=None):
+    rgb2rgb, newheader = prep_color_transform(inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb)
+    if inp == "yxy":
+        dy = imgd[0]
+        dx = imgd[0]*imgd[1]/imgd[2]
+        dz = (1-imgd[1]-imgd[2])*imgd[0]/imgd[2]
+        imgd = np.stack((dx, dy, dz))
+    rgb = np.einsum('ij,jkl->ikl', rgb2rgb, imgd)
+    if outp == "yxy":
+        dY = rgb[1]
+        sxyz = np.sum(rgb, axis=0)
+        dx = rgb[0]/sxyz
+        dy = rgb[1]/sxyz
+        rgb = np.stack((dY, dx, dy))
+    return rgb, header + newheader
