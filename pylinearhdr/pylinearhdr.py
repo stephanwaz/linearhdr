@@ -223,7 +223,7 @@ def pw_mtx(p, w):
 
 def mtx_pw(mtx):
     """calculate primaries and whitepoint from rgb->xyz matrix"""
-    mtx = np.asarray(mtx).reshape(3,3)
+    mtx = np.asarray(mtx).reshape(3, 3)
     primaries = (mtx[0:2]/np.sum(mtx, axis=0)).T.ravel()
     whitepoint = np.sum(mtx, axis=1)[0:2]/np.sum(mtx)
     return primaries, whitepoint

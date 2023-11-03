@@ -74,7 +74,7 @@
 using namespace std;
 
 #define PROG_NAME "linearhdr"
-#define PROG_VERSION "0.1.2"
+#define PROG_VERSION "0.1.3"
 
 inline float max(float a, float b) {
     return (a > b) ? a : b;
@@ -94,6 +94,12 @@ inline float min(float a, float b, float c) {
 
 inline float max(float a, float b, float c, float d) {
     return max(max(max(a, b), c), d);
+}
+
+// since efcc happens before check for in range,
+// make sure efcc_correction does not pull over/underexposed values into range
+inline float efcc_corr(float val, float c, float o_low, float o_high){
+    return (val > o_low && val < 1 - o_high) ? val * c : val;
 }
 
 struct FrameInfo {float etime; float iso; float aperture; float factor;};
@@ -210,6 +216,8 @@ void linearhdr_main(int argc, char *argv[]) {
             { "efc", required_argument, nullptr, 'C' },
             { "oor-low", required_argument, nullptr, 'm' },
             { "oor-high", required_argument, nullptr, 'x' },
+            { "oob-low", required_argument, nullptr, 'm' },
+            { "oob-high", required_argument, nullptr, 'x' },
             {nullptr, 0,                         nullptr, 0}
     };
 
@@ -424,10 +432,14 @@ void linearhdr_main(int argc, char *argv[]) {
                     // apply electronic front curtain shutter correction
                     if (efc[efci][0] > 0){
                         efcc = 1/pow(((height-i) / efc[efci][2] + efc[efci][0] * info.etime)/(1 + efc[efci][0] * info.etime), efc[efci][1]);
+                        (*eR.yi)(s) = efcc_corr((*X)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
+                        (*eG.yi)(s) = efcc_corr((*Y)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
+                        (*eB.yi)(s) = efcc_corr((*Z)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
+                    } else {
+                        (*eR.yi)(s) = (*X)(s);
+                        (*eG.yi)(s) = (*Y)(s);
+                        (*eB.yi)(s) = (*Z)(s);
                     }
-                    (*eR.yi)(s) = (*X)(s) * efcc;
-                    (*eG.yi)(s) = (*Y)(s) * efcc;
-                    (*eB.yi)(s) = (*Z)(s) * efcc;
                     pmax = max((*X)(s), (*Y)(s), (*Z)(s), pmax);
             }
 

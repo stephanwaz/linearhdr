@@ -62,6 +62,7 @@ it under the terms of the one of two licenses as you choose:
 #endif
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <iostream>
 
 #ifdef LIBRAW_WIN32_CALLS
 #define snprintf _snprintf
@@ -80,6 +81,8 @@ it under the terms of the one of two licenses as you choose:
 void usage(const char *prog)
 {
   printf("rawconvert: dcraw_emu fork that ensures consistent scaling of raw output as raw RGB\n");
+  printf("IMPORTANT! you must set -S and -k for reliable results! use:\n");
+  printf("\texiftool -AverageBlackLevel -LinearityUpperMargin (or equivalent metadata for your camera\n\n");
   printf("Usage:  %s [OPTION]... [FILE]...\n", prog);
   printf("-v        Verbose: print progress messages (repeated -v will add "
          "verbosity)\n"
@@ -320,7 +323,6 @@ int main(int argc, char *argv[])
 #define C RawProcessor.imgdata.color
 #define T RawProcessor.imgdata.thumbnail
 
-
 if (verbosity > 1)
 RawProcessor.set_progress_handler(my_progress_callback,
                                   (void *)"Sample data passed");
@@ -340,7 +342,6 @@ RawProcessor.set_progress_handler(my_progress_callback,
 
 
     ret = RawProcessor.open_file(argv[arg]);
-
 
     if (identify){
       fprintf(stdout, "RGBG multipliers:\t%6.4f\t%6.4f\t%6.4f\t%6.4f\n", OUT.user_mul[0], OUT.user_mul[1], OUT.user_mul[2], OUT.user_mul[3]);
@@ -369,6 +370,10 @@ RawProcessor.set_progress_handler(my_progress_callback,
       continue;
     }
 
+    if (OUT.user_black < 0) {
+        std::cerr << "WARNING! -k not set, computed black point is: " << C.black << std::endl;
+    }
+
     if (LIBRAW_SUCCESS != (ret = RawProcessor.dcraw_process()))
     {
       fprintf(stderr, "Cannot do postprocessing on %s: %s\n", argv[arg],
@@ -376,6 +381,10 @@ RawProcessor.set_progress_handler(my_progress_callback,
       if (LIBRAW_FATAL_ERROR(ret))
         continue;
     }
+
+      if (OUT.user_sat < 0) {
+          std::cerr << "WARNING! -S not set, computed white point is: " << C.maximum << std::endl;
+      }
 
 
     if (!outext)

@@ -348,8 +348,6 @@ def run(ctx, imgs, **kwargs):
 @click.option("-sunloc", callback=clk.split_int,
               help="pixel location of sun used to set band location. If not given auto-locates based on max pixels in"
                    "imgn.")
-@click.option("--flip/--no-flip", default=False,
-              help="by default the imgh will be used in the UL and LR quadrants, flip=True will use imgh UR and LL")
 @click.option("-envmap",
               help="additionally save an hdr file suitable for use as an environment map, source information is in the header")
 @click.option("-margin", default=20,
@@ -403,7 +401,13 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
             hdata2[:, xt2, yt2] = hdata[:, xt, yt]
             hdata = hdata2
             hh.append(f"\tSHADOWBAND_IMAGE_ALIGN= {xo} {yo}")
+        margin = 0
     if fisheye:
+        if margin > 0:
+            t = slice(margin, -margin)
+            sdata = sdata[:, t, t]
+            vdata = vdata[:, t, t]
+            hdata = hdata[:, t, t]
         hdata, vdata, sdata = pool_call(imagetools.array_solid2ang, [hdata, vdata, sdata], expandarg=False, returnvm=False, pbar=False)
     blended, skyonly, source = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw,
                                              envmap=envmap, sunloc=sunloc, check=check)

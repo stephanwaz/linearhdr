@@ -16,7 +16,7 @@
 
 __author__ = """Stephen Wasilewski"""
 __email__ = 'stephanwaz@gmail.com'
-__version__ = '0.1.2'
+__version__ = '0.1.3'
 __all__ = ['shadowband']
 
 from pylinearhdr import shadowband, pylinearhdr

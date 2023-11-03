@@ -121,7 +121,6 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
     mask[ur] = 1
     mask[ll] = 1
     mask[lr] = 0
-    mask = ndimage.uniform_filter(mask, band/4)
 
     # profile angles of sun (now along shadowband orientation)
     sangles = profile_angles(sb_cpxyz, roh, rov).reshape(1, 1, 2)
@@ -134,12 +133,19 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
     outer_src_mask = ndimage.uniform_filter(outer_src_mask.astype(float), band/4)
     # use this area for interpolation
     inter_src_mask = np.logical_and(outer_src_mask < .5, outer_src_mask > .01)
+    # interpolate everything in outer regions to allow for blending
+    src_mask = outer_src_mask > .01
+
+    # don't blur near intersection too much, blur more once its safe
+    init_blend_mask = np.all(pdiff < bw * 3, axis=2)
+    mask2 = ndimage.uniform_filter(mask, band/4)
+    mask = ndimage.uniform_filter(mask, band)
+    mask[init_blend_mask] = mask2[init_blend_mask]
 
     # first make initial estimate (quadrants for "safe" values, maximum for near values)
     blend = (vdata * mask + hdata * (1-mask)) * (1 - outer_src_mask) + outer_src_mask * np.maximum(vdata, hdata)
 
-    # interpolate everything in outer regions to allow for blending
-    src_mask = outer_src_mask > .01
+
 
     if check is not None:
         mask3 = np.copy(np.broadcast_to(mask, (3, *mask.shape)))
