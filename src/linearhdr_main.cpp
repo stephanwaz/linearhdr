@@ -74,7 +74,7 @@
 using namespace std;
 
 #define PROG_NAME "linearhdr"
-#define PROG_VERSION "0.1.3"
+#define PROG_VERSION "0.1.4"
 
 inline float max(float a, float b) {
     return (a > b) ? a : b;
@@ -126,8 +126,6 @@ void printHelp() {
                     "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.2\n"
                     "\t[--range, -r <val>]: lower range of single raw exposure, used to set lower cutoff,"
                     "\n\t\tgive as value between 0 and 0.25, default=0.01\n"
-                    "\t[--deghosting, -d <val>]: relative difference for outlier detection when less than 1,"
-                    "\n\t\totherwise absolute difference (good for clouds) default=OFF\n"
                     "\t[--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak,"
                     "\n\t\tdo not use with large files!\n"
                     "\t[--oor-low, -m <val>]: value to use for out of range low, default from data\n"
@@ -176,7 +174,6 @@ void linearhdr_main(int argc, char *argv[]) {
 
     float opt_saturation_offset_perc = 0.2;
     float opt_black_offset_perc = 0.01;
-    float opt_deghosting = -1;
     float opt_scale = 1.0f;
     bool dataonly = false;
     bool rgbe = true;
@@ -207,7 +204,6 @@ void linearhdr_main(int argc, char *argv[]) {
             {"bayer",    no_argument,       nullptr, 'B'},
             {"debayer",    no_argument,       nullptr, 'D'},
             {"nominal",    no_argument,       nullptr, 'n'},
-            {"deghosting", required_argument, nullptr, 'd'},
             {"tsv", no_argument, nullptr, 't'},
             { "saturation-offset", required_argument, nullptr, 'o' },
             { "range", required_argument, nullptr, 'r' },
@@ -279,11 +275,6 @@ void linearhdr_main(int argc, char *argv[]) {
                 k << optarg;
                 k >> efcr[efci] >> efc[efci][0] >> efc[efci][1] >> efc[efci][2];
                 efci++;
-                break;
-            case 'd':
-                opt_deghosting = atof(optarg);
-                if (opt_deghosting < 0)
-                    throw pfs::Exception("deghosting threshold should be >0");
                 break;
             case 't':
                 dataonly = true;
@@ -496,8 +487,8 @@ void linearhdr_main(int argc, char *argv[]) {
 
     VERBOSE_STR << "applying response..." << endl;
     sp = linear_response(RGB_out, exposures, opt_saturation_offset_perc,
-                         opt_black_offset_perc, opt_deghosting,
-                         opt_scale, vlambda, rgb_corr, oor_high, oor_low, isbayer, demosaic);
+                         opt_black_offset_perc, opt_scale, vlambda, rgb_corr,
+                         oor_high, oor_low, isbayer, demosaic);
 
     if (sp > 0) {
         float perc = ceilf(100.0f * sp / size);

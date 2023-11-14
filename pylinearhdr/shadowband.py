@@ -13,6 +13,7 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # =======================================================================
+import sys
 
 import numpy as np
 from raytools import io, translate
@@ -40,7 +41,7 @@ def blend_bands(x, b, c=None):
     return np.where(x > b, np.where(x < b+c, np.cos((x-b)*np.pi/c)/2+.5, 0), 1)
 
 
-def align_images(im0, im1, inscribe=True, bottom=True):
+def align_images(im0, im1, bottom=True):
     """code modified from: https://github.com/khufkens/align_images (AGPL-3.0 License)
 
     see: https://en.wikipedia.org/wiki/Phase_correlation
@@ -58,7 +59,7 @@ def align_images(im0, im1, inscribe=True, bottom=True):
     xy = (np.stack(np.mgrid[0:xi, 0:yi], 2) + 0.5) / np.array((xi/2, yi/2)) - 1
     window = np.maximum(0, 1 - np.linalg.norm(xy, axis=2))
 
-    # take log of values to downplay extreme peaks (which are often supposed to be misaligned)
+    # take log of values to downplay extreme peaks (which are often not expected to be aligned)
     im0 = np.log10(im0 + 1) * window
     im1 = np.log10(im1 + 1) * window
 
@@ -99,8 +100,6 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
     pxyz = im.find_peak(v[up], omega[up], lum[up], peaka=srcsize)[0][0]
     if sb_cpxyz is None:
         sb_cpxyz = pxyz
-    else:
-        print(translate.degrees(sb_cpxyz.ravel(), pxyz))
 
     # blend along midpoint between two shadowbands
     rotation = 45+np.average((roh, rov))
@@ -127,12 +126,14 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
     # profile angles of pixels
     pangles = profile_angles(v, roh, rov).reshape(res, res, 2)
     pdiff = np.abs(sangles - pangles) * 180/np.pi
+
+    ce = vm.ctheta(sb_cpxyz)[0]
     # anything within 3 degrees of both shadowbands
-    outer_src_mask = np.all(pdiff < bw * 1.5, axis=2)
+    outer_src_mask = np.linalg.norm(pdiff, axis=2) < bw * (2 - ce)
     # blur to create tolerance regions
-    outer_src_mask = ndimage.uniform_filter(outer_src_mask.astype(float), band/4)
+    outer_src_mask = ndimage.uniform_filter(outer_src_mask.astype(float), band/2)
     # use this area for interpolation
-    inter_src_mask = np.logical_and(outer_src_mask < .5, outer_src_mask > .01)
+    inter_src_mask = np.logical_and(outer_src_mask < .5, outer_src_mask > .001)
     # interpolate everything in outer regions to allow for blending
     src_mask = outer_src_mask > .01
 
@@ -145,8 +146,6 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
     # first make initial estimate (quadrants for "safe" values, maximum for near values)
     blend = (vdata * mask + hdata * (1-mask)) * (1 - outer_src_mask) + outer_src_mask * np.maximum(vdata, hdata)
 
-
-
     if check is not None:
         mask3 = np.copy(np.broadcast_to(mask, (3, *mask.shape)))
         mask3[0, src_mask] = 0
@@ -154,36 +153,38 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
         mask3[2, src_mask] = mask3[2, src_mask]
         mask3[1:, outer_src_mask >= .5] = 0
         mask3[0, outer_src_mask >= .5] = 1
-        # srcmaskimg = np.copy(blend)
-        # srcmaskimg *= (1-src_mask + .2)/1.2
-        # srcmaskimg[0, inter_src_mask] *= 20
-
         io.array2hdr(mask3, f"{check}_mask.hdr")
-        # io.array2hdr(srcmaskimg, f"{check}_srcmask.hdr")
+        io.carray2hdr(hdata, f"{check}_H.hdr")
+        io.carray2hdr(vdata, f"{check}_V.hdr")
 
     vms = ViewMapper(dxyz=sb_cpxyz, viewangle=45)
     lum = blend[:, inter_src_mask].reshape(3, -1).T
 
     lp = LightPointKD(None, v[inter_src_mask.ravel()], lum, vm=vm, features=3, calcomega=False, write=False)
-    i, w = lp.interp(v[src_mask.ravel()], 20, lum=False, angle=False)
-
-    clum = lp.apply_interp(i, lum, w)
 
     # interpolate between edge of interpolation frame and extrapolated center
     # distance from frame to center
-    i, d = lp.query_ray(v[src_mask.ravel()])
+    i, _ = lp.query_ray(v[src_mask.ravel()])
     d2 = vms.radians(lp.vec[i])
+
+    # extrapolate center
+    d = vms.radians(v[inter_src_mask.ravel()])
+    _, ir, rr, _, _ = stats.linregress(d, lum[:, 0])
+    _, ig, rg, _, _ = stats.linregress(d, lum[:, 1])
+    _, ib, rb, _, _ = stats.linregress(d, lum[:, 2])
+
     # distance from center to pixel
     d3 = vms.radians(v[src_mask.ravel()])
+    # scaled distance from frame to center
     df = np.clip(d3/d2, 0, 1)[:, None]
+    rf = 1 - np.average(np.abs([(rr, rg, rb)]))
+    # weight linear extrapolation by correlation
+    df = (df + rf) / (1 + rf)
 
-    # extrapoloate center
-    d = vms.degrees(v[inter_src_mask.ravel()])
-    sr, ir, _, _, _ = stats.linregress(d, lum[:, 0])
-    sg, ig, _, _, _ = stats.linregress(d, lum[:, 1])
-    sb, ib, _, _, _ = stats.linregress(d, lum[:, 2])
-    clum = clum * df + np.array([(ir, ig, ib)]) * (1-df)
-    # blend in combined interpolation
+    bw2 = min(60, int(np.sum(inter_src_mask) * .02 * (1 + np.all(np.abs([rr, rg, rb]) > 0.9))))
+    i, w = lp.interp(v[src_mask.ravel()], bw2, lum=False, angle=True, dither=False)
+    clum = lp.apply_interp(i, lum, w) * df + np.array([(ir, ig, ib)]) * (1-df)
+
     blend[:, src_mask] = blend[:, src_mask] * (1 - outer_src_mask[src_mask][None]) + outer_src_mask[src_mask][None] * clum.T
 
     # isolate area around source to gather lens flare energy

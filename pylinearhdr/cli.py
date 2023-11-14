@@ -30,7 +30,7 @@ from raytools import io, imagetools
 from raytools.utility import pool_call
 from pylinearhdr import shadowband as sb
 from pylinearhdr import pylinearhdr as pl
-
+from pylinearhdr import calibrate as cl
 
 def get_profiles():
     d = os.path.dirname(pylinearhdr.__file__)
@@ -379,7 +379,7 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
 
     """
     sbobt = (f"SHADOWBAND= roh:{roh:.03f} rov:{rov:.03f} sfov:{sfov:.03f} srcsize:{srcsize:.04f} bw:{bw:.04f} "
-             f"align:{align} fisheye:{fisheye}")
+             f"align:{align} fisheye:{fisheye} sunloc:{sunloc} margin:{margin}")
     hdata, hh = io.hdr2carray(imgh, header=True)
     vdata, hv = io.hdr2carray(imgv, header=True)
     sdata, hs = io.hdr2carray(imgn, header=True)
@@ -549,12 +549,36 @@ def vignette(ctx, img, vfile=None, **kwargs):
     io.array2hdr(imgv, None, header=[f"VIGNETTING_CORRECTION= {vfile}"] + header, clean=True)
 
 
+
+
+@main.command()
+@click.argument("reference", callback=clk.is_file)
+@click.argument("test", callback=clk.is_file)
+@click.option("-rc", callback=clk.is_file,
+              help='file of pixel locations corresponding to target areas in the reference. each row has four numbers '
+                   'x y w h, where x, y are the lower left corner. if not given script will interactively'
+                   'generate. The first point should always be the "white-point"')
+@click.option("-tc", callback=clk.is_file,
+              help='file of pixel locations corresponding to target areas in the test. each row has four numbers '
+                   'x y w h, where x, y are the lower left corner. if not given script will interactively'
+                   'generate. The first point should always be the "white-point"')
+@click.option("--alternate/--no-alternate", default=False,
+              help='if true and neither -rc or -tc are provided, opens both images simultaneously and expects '
+                   'alternating inputs (cell 1 ref, cell 1 test, cell 2 ref, cell 2 test, etc.')
+@clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
+def calibrate(ctx, reference, test, rc=None, tc=None, alternate=False, **kwargs):
+    result = cl.calibrate(reference, test, rc, tc, alternate)
+    print("xyzcam matrix:")
+    for k, v in result.items():
+        print(f"{k}:\t" + " ".join([str(i) for i in v['xyzcam'].ravel()]))
+
+
 @main.command()
 @click.argument("img", callback=hdr_data_load)
 @click.option("-inp", default='rad', help="input image primaries and wp. either 8 values, predefined aliases, or colorformat. Aliases:\n"
                                           "\t rad: (0.640, 0.330, 0.290, 0.600, 0.150, 0.060, 0.3333, 0.3333)\n"
                                           "\t srgb: (0.640,  0.330,  0.300,  0.600,  0.150,  0.060, 0.3127, 0.329)\ncolorformat:\n"
-                                          "\t xyz yxy")
+                                          "\t xyz yxy yuv")
 @click.option("-outp", default='srgb', help="output image primaries and wp. either 8 values or predefined aliases (see -inp)")
 @click.option("-xyzrgb", default=None, help="alternative input as xyz->rgb matrix (overrides -inp)")
 @click.option("-oxyzrgb", default=None, help="alternative output as xyz->rgb matrix (overrides -outp)")
@@ -581,6 +605,12 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
             dx = img[:, 0]*img[:, 1]/img[:, 2]
             dz = (1-img[:,1]-img[:,2])*img[:,0]/img[:,2]
             img = np.stack((dx,dy,dz)).T
+        elif inp == "yuv":
+            dy = img[:, 0]
+            d = 9 * dy / img[:, 2]
+            dx = img[:, 1] * 9 * dy / (4 * img[:, 2])
+            dz = (d - dx - 15 * dy) / 3
+            img = np.stack((dx, dy, dz)).T
         rgb = np.einsum('ij,kj->ki', rgb2rgb, img)
         if outp == "yxy":
             dY = rgb[:, 1]
@@ -588,6 +618,11 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
             dx = rgb[:, 0]/sxyz
             dy = rgb[:, 1]/sxyz
             rgb = np.stack((dY, dx, dy)).T
+        elif outp == 'yuv':
+            d = rgb[:, 0] + 15 * rgb[:, 1] + 3 * rgb[:, 2]
+            u = 4 * rgb[:, 0] / d
+            v = 9 * rgb[:, 1] / d
+            rgb = np.stack((rgb[:, 1], u, v)).T
         for r in rgb:
             print(*r)
 

@@ -135,7 +135,7 @@ def name_by_exif(img, prefix=None, aperture=True, iso=True, shutter=True):
         k, v = i.split()
         if k == "Aperture":
             k = "F-"
-            if v.lower() != "inf":
+            if v.lower() == "inf":
                 v = "inf"
             else:
                 v = str(int(round(float(v))))
@@ -315,11 +315,11 @@ def str_primaries_2_mtx(inp, mtx=None):
 
 def prep_color_transform(inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb=None):
     newheader = []
-    if inp in ["xyz", "yxy"]:
+    if inp in ["xyz", "yxy", 'yuv']:
         inp2xyz = np.eye(3)
     else:
         inp2xyz, _, _ = str_primaries_2_mtx(inp, xyzrgb)
-    if outp in ["xyz", "yxy"]:
+    if outp in ["xyz", "yxy", 'yuv']:
         rgb2rgb = inp2xyz
         rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
         newheader.append(f"RGB2XYZ= {rgb2rgbs}")
@@ -348,6 +348,12 @@ def color_convert_img(imgd, header, inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb
         dx = imgd[0]*imgd[1]/imgd[2]
         dz = (1-imgd[1]-imgd[2])*imgd[0]/imgd[2]
         imgd = np.stack((dx, dy, dz))
+    elif inp == "yuv":
+        dy = imgd[0]
+        d = 9 * dy / imgd[2]
+        dx = imgd[1] * 9 * dy / (4 * imgd[2])
+        dz = (d - dx - 15 * dy) / 3
+        imgd = np.stack((dx, dy, dz))
     rgb = np.einsum('ij,jkl->ikl', rgb2rgb, imgd)
     if outp == "yxy":
         dY = rgb[1]
@@ -355,4 +361,9 @@ def color_convert_img(imgd, header, inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb
         dx = rgb[0]/sxyz
         dy = rgb[1]/sxyz
         rgb = np.stack((dY, dx, dy))
+    elif outp == 'yuv':
+        d = rgb[0] + 15 * rgb[1] + 3 * rgb[2]
+        u = 4 * rgb[0] / d
+        v = 9 * rgb[1] / d
+        rgb = np.stack((rgb[1], u, v))
     return rgb, header + newheader

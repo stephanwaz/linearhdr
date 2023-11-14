@@ -99,7 +99,6 @@ int linear_response(pfs::Array2D *out[],
                    const ExposureList *imgs[],
                    const float opt_saturation_offset,
                    const float opt_black_offset,
-                   float deghosting_value,
                    const float scale,
                    const float vlambda[3],
                    const float rgb_corr[3][3],
@@ -137,7 +136,6 @@ int linear_response(pfs::Array2D *out[],
     float aavg[3] = {0.0, 0.0, 0.0};
     float ravg[3] = {0.0, 0.0, 0.0};
 
-    int skipped_deghost = 0; // counter for reporting
     float lummax = 0;
     float lummin = 1e30;
     float lum;
@@ -157,24 +155,18 @@ int linear_response(pfs::Array2D *out[],
 
             float X[3][N]; // stores the value for each frame
             float w[N]; // stores the weight for each frame
-            bool saturated_exp[N]; // track sat/under/ghost
+            bool saturated_exp[N]; // track sat/under
             bool under_exp[N];
-            bool skip_exp[N];
             fill(w, w + N, 1.0);
             fill(saturated_exp, saturated_exp + N, false);
             fill(under_exp, under_exp + N, false);
-            fill(skip_exp, skip_exp + N, false);
-
-            // track reference frame for deghosting
-            int ref = 0;
-            bool foundref = false;
 
             // only operate on relevant color when isbayer (modifies function of all cc loops)
             if (isbayer) {
                 ccf = grid_color(i, j, g0, r0);
             }
 
-            // First compute scene values, weights and reference frames for deghosting
+            // First compute scene values and weights
             for (int n = 0; n < N; n++) {
                 for (int cc = ccf; cc < 3; cc += cinc) {
                     X[cc][n] = (*(*imgs[cc])[n].yi)(k) * get_exposure_compensationX((*imgs[cc])[n]) * scale;
@@ -182,29 +174,7 @@ int linear_response(pfs::Array2D *out[],
                     saturated_exp[n] = ((*(*imgs[cc])[n].yi)(k) >= 1 - opt_saturation_offset) || saturated_exp[n];
                     under_exp[n] = ((*(*imgs[cc])[n].yi)(k) <= opt_black_offset) || under_exp[n];
                 }
-                if (!foundref && (!saturated_exp[n] && !under_exp[n])) {
-                    // use first (slowest) exposure (least noise as reference frame for deghosting)
-                    ref = n;
-                    foundref = true;
-                }
             }
-
-            // flag frames to skip for deghosting
-            if (deghosting_value > 0)
-                for (int n = 0; n < N; n++)
-                    if (n != ref) {
-                        float deviation_from_ref = 0;
-                        for (int cc = ccf; cc < 3; cc += cinc) {
-                            //use absolute deviation
-                            if (deghosting_value >= 1)
-                                deviation_from_ref = max(deviation_from_ref, fabs((float) (X[cc][n] - X[cc][ref])));
-                            else
-                                deviation_from_ref = max(deviation_from_ref, fabs((float) (1 - X[cc][n] / X[cc][ref])));
-                        }
-                        skip_exp[n] = deviation_from_ref > deghosting_value;
-                        if (skip_exp[n])
-                            skipped_deghost++;
-                    }
 
             float div = 0.0f; // track sum of weights for averaging
             bool all_under = true;
@@ -214,7 +184,7 @@ int linear_response(pfs::Array2D *out[],
             for (int n = 0; n < N; n++) {
                 all_under &= under_exp[n];
                 all_over &= saturated_exp[n];
-                if (!(saturated_exp[n] || under_exp[n] || skip_exp[n])) {
+                if (!(saturated_exp[n] || under_exp[n])) {
                     div += w[n];
                     for (int cc = ccf; cc < 3; cc += cinc) {
                         (*out[cc])(k) += X[cc][n] * w[n];
@@ -334,9 +304,6 @@ int linear_response(pfs::Array2D *out[],
     }
 
     VERBOSE_STR << "Maximum Value: " << mmax[0] << ", " << mmax[1] << ", " << mmax[2] << std::endl;
-    if (deghosting_value > 0)
-        VERBOSE_STR << "Exposure pixels skipped due to deghosting: " <<
-                    (float) skipped_deghost * 100.f / (float) (NP * N) << "%" << std::endl;
 
     if (under_pixels > 0) {
         float perc = ceilf(100.0f * under_pixels / NP);
