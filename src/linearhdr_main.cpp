@@ -74,7 +74,7 @@
 using namespace std;
 
 #define PROG_NAME "linearhdr"
-#define PROG_VERSION "0.1.4"
+#define PROG_VERSION "0.1.5"
 
 inline float max(float a, float b) {
     return (a > b) ? a : b;
@@ -126,8 +126,7 @@ void printHelp() {
                     "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.2\n"
                     "\t[--range, -r <val>]: lower range of single raw exposure, used to set lower cutoff,"
                     "\n\t\tgive as value between 0 and 0.25, default=0.01\n"
-                    "\t[--tsv, -t]: output raw data as tsv, exposures seperated by extra linebreak,"
-                    "\n\t\tdo not use with large files!\n"
+                    "\t[--tsv, -t]: output data as tsv\n"
                     "\t[--oor-low, -m <val>]: value to use for out of range low, default from data\n"
                     "\t[--oor-high, -x <val>]: value to use for out of range high, default from data\n"
                     "\t[--rgbs, -k '<val> <val> <val>']: rgb channel calibration default=1.0 1.0 1.0\n"
@@ -160,12 +159,6 @@ void printHelp() {
 void linearhdr_main(int argc, char *argv[]) {
 
     std::stringstream header;
-    header << PROG_NAME << "_VERSION= " << PROG_VERSION << endl;
-    header << argv[0];
-    for (int i = 1; i < argc-1; i++){
-        header << " " << argv[i];
-    }
-    header << endl;
 
 
     pfs::DOMIO pfsio;
@@ -175,7 +168,7 @@ void linearhdr_main(int argc, char *argv[]) {
     float opt_saturation_offset_perc = 0.2;
     float opt_black_offset_perc = 0.01;
     float opt_scale = 1.0f;
-    bool dataonly = false;
+    bool tsv = false;
     bool rgbe = true;
     bool nominal = false;
     bool isbayer = false;
@@ -277,7 +270,7 @@ void linearhdr_main(int argc, char *argv[]) {
                 efci++;
                 break;
             case 't':
-                dataonly = true;
+                tsv = true;
                 break;
             case 'R':
                 rgbe = true;
@@ -295,6 +288,14 @@ void linearhdr_main(int argc, char *argv[]) {
         throw QuietException();
     }
 
+    string cprefix = tsv ? "" : "";
+    header << cprefix << PROG_NAME << "_VERSION= " << PROG_VERSION << endl;
+    header << cprefix << argv[0];
+    for (int i = 1; i < argc-1; i++){
+        header << " " << argv[i];
+    }
+    header << endl;
+
     std::ifstream infile(argv[optind]);
 
     int frame_no = 0;
@@ -306,6 +307,7 @@ void linearhdr_main(int argc, char *argv[]) {
     float gmax = 1e-30;
     bool oorange = true;
     float pmax;
+    float calfac;
 
     // collected exposures
     ExposureList imgsR;
@@ -345,7 +347,7 @@ void linearhdr_main(int argc, char *argv[]) {
                         istringstream ss(comment.substr(equal+1, comment.size()));
                         ss >> vlambda[0] >> vlambda[1] >> vlambda[2];
                     }
-                    header << comment.substr(begin, comment.size()) << endl;
+                    header  << cprefix << comment.substr(begin, comment.size()) << endl;
                 }
                 continue;
             }
@@ -378,68 +380,53 @@ void linearhdr_main(int argc, char *argv[]) {
         height = Y->getRows();
         size = width * height;
 
-        // for direct standard output (no merging)
-        if (dataonly){
-            fmax = info.factor;
-            float r, g, b;
-            for (int i = 0; i < size; i++) {
-                r = ((*X)(i) * rgb_corr[0][0] + (*Y)(i) * rgb_corr[0][1] + (*Z)(i) * rgb_corr[0][2]) * rgbcal[0];
-                g = ((*X)(i) * rgb_corr[1][0] + (*Y)(i) * rgb_corr[1][1] + (*Z)(i) * rgb_corr[1][2]) * rgbcal[1];
-                b = ((*X)(i) * rgb_corr[2][0] + (*Y)(i) * rgb_corr[2][1] + (*Z)(i) * rgb_corr[2][2]) * rgbcal[2];
-                std::cout << (*X)(i) << "\t" << (*Y)(i) << "\t" << (*Z)(i) << "\t";
+        Exposure eR, eG, eB;
+        eR.iso = info.iso;
+        eG.iso = info.iso;
+        eB.iso = info.iso;
+        eR.aperture = eG.aperture = eB.aperture = info.aperture;
+        eR.exposure_time = eG.exposure_time = eB.exposure_time = info.etime;
+        eR.yi = new pfs::Array2DImpl(width, height);
+        eG.yi = new pfs::Array2DImpl(width, height);
+        eB.yi = new pfs::Array2DImpl(width, height);
 
-                pmax = max((*X)(i), (*Y)(i), (*Z)(i), pmax);
-                float below = min((*X)(i), (*Y)(i), (*Z)(i)) < opt_black_offset_perc;
-                float above = max((*X)(i), (*Y)(i), (*Z)(i)) > 1 - opt_saturation_offset_perc;
-                float lum = (vlambda[0]*r + vlambda[1]*g + vlambda[2]*b) * fmax;
-                std::cout << r * fmax << "\t" << g * fmax << "\t" << b * fmax << "\t" << lum << "\t" << below << "\t" << above << std::endl;
-            }
-            std::cout  << std::endl;
-        } else {
-            Exposure eR, eG, eB;
-            eR.iso = info.iso;
-            eG.iso = info.iso;
-            eB.iso = info.iso;
-            eR.aperture = eG.aperture = eB.aperture = info.aperture;
-            eR.exposure_time = eG.exposure_time = eB.exposure_time = info.etime;
-            eR.yi = new pfs::Array2DImpl(width, height);
-            eG.yi = new pfs::Array2DImpl(width, height);
-            eB.yi = new pfs::Array2DImpl(width, height);
+        if (eR.yi == nullptr || eG.yi == nullptr || eB.yi == nullptr)
+            throw pfs::Exception("could not allocate memory for source exposure");
 
-            if (eR.yi == nullptr || eG.yi == nullptr || eB.yi == nullptr)
-                throw pfs::Exception("could not allocate memory for source exposure");
-
-            // choose right efc coefficients
-            for (int i = 0; i < 3; i++) {
-                efci = i;
-                if (info.etime < efcr[i])
-                    break;
-            }
-            int s;
-            float efcc = 1.0;
-            for (int i = 0; i < height; i++)
-                for (int j = 0; j < width; j++) {
-                    s = j + i * width;
-                    // apply electronic front curtain shutter correction
-                    if (efc[efci][0] > 0){
-                        efcc = 1/pow(((height-i) / efc[efci][2] + efc[efci][0] * info.etime)/(1 + efc[efci][0] * info.etime), efc[efci][1]);
-                        (*eR.yi)(s) = efcc_corr((*X)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
-                        (*eG.yi)(s) = efcc_corr((*Y)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
-                        (*eB.yi)(s) = efcc_corr((*Z)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
-                    } else {
-                        (*eR.yi)(s) = (*X)(s);
-                        (*eG.yi)(s) = (*Y)(s);
-                        (*eB.yi)(s) = (*Z)(s);
-                    }
-                    pmax = max((*X)(s), (*Y)(s), (*Z)(s), pmax);
-            }
-
-            // add to exposures list
-            imgsR.push_back(eR);
-            imgsG.push_back(eG);
-            imgsB.push_back(eB);
+        // choose right efc coefficients
+        for (int i = 0; i < 3; i++) {
+            efci = i;
+            if (info.etime < efcr[i])
+                break;
         }
-        fmax = info.factor * (1 - opt_saturation_offset_perc);
+        int s;
+        float efcc;
+        for (int i = 0; i < height; i++)
+            for (int j = 0; j < width; j++) {
+                s = j + i * width;
+                // apply electronic front curtain shutter correction
+                if (efc[efci][0] > 0){
+                    efcc = 1/pow(((height-i) / efc[efci][2] + efc[efci][0] * info.etime)/(1 + efc[efci][0] * info.etime), efc[efci][1]);
+                    (*eR.yi)(s) = efcc_corr((*X)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
+                    (*eG.yi)(s) = efcc_corr((*Y)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
+                    (*eB.yi)(s) = efcc_corr((*Z)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
+                } else {
+                    (*eR.yi)(s) = (*X)(s);
+                    (*eG.yi)(s) = (*Y)(s);
+                    (*eB.yi)(s) = (*Z)(s);
+                }
+                pmax = max((*X)(s), (*Y)(s), (*Z)(s), pmax);
+        }
+
+        // add to exposures list
+        imgsR.push_back(eR);
+        imgsG.push_back(eG);
+        imgsB.push_back(eB);
+
+        calfac = 0.0;
+        for (int m = 0; m < 3; m++)
+            calfac += vlambda[m] * rgbcal[m] * (rgb_corr[m][0] + rgb_corr[m][1] + rgb_corr[m][2]);
+        fmax = info.factor * (1 - opt_saturation_offset_perc) * calfac;
         fmin = fmax * opt_black_offset_perc;
         gmax = max(gmax, fmax);
         gmin = min(gmin, fmin);
@@ -451,20 +438,19 @@ void linearhdr_main(int argc, char *argv[]) {
         pfsio.freeFrame(iframe);
     }
 
+    if (frame_no < 1)
+        throw pfs::Exception("at least one image required for calibration (check paths in hdrgen script?)");
+
+
     for (int i = 0; i < 3; i++){
         for (int j = 0; j < 3; j++) {
             rgb_corr[i][j] = rgb_corr[i][j] * rgbcal[i];
         }
     }
 
-    if (dataonly)
-        return;
-    if (frame_no < 1)
-        throw pfs::Exception("at least one image required for calibration (check paths in hdrgen script?)");
-
-    header << "HDR_SEQUENCE_COUNT= " << frame_no << endl;
-    header << "HDR_VALID_RANGE= " << std::setprecision(3) << gmin << "-" << gmax << " cd/m^2" << endl;
-    VERBOSE_STR << "using " << frame_no  << std::setprecision(3) << " frames, range min:" << gmin << ", max:" << gmax <<  endl;
+    header  << cprefix << "HDR_SEQUENCE_COUNT= " << frame_no << endl;
+    header  << cprefix << "HDR_VALID_RANGE= " << std::setprecision(5) << gmin << "-" << gmax << " cd/m^2" << endl;
+    VERBOSE_STR << "using " << frame_no  << std::setprecision(5) << " frames, range min:" << gmin << ", max:" << gmax <<  endl;
 
     if (oorange) {
         VERBOSE_STR << "Warning: some pixels out of range..."  <<  endl;
@@ -485,7 +471,7 @@ void linearhdr_main(int argc, char *argv[]) {
     pfs::Array2D *RGB_out[3] = {Xj, Yj, Zj};
     const ExposureList *exposures[] = {&imgsR, &imgsG, &imgsB};
 
-    VERBOSE_STR << "applying response..." << endl;
+    VERBOSE_STR << "merging hdr..." << endl;
     sp = linear_response(RGB_out, exposures, opt_saturation_offset_perc,
                          opt_black_offset_perc, opt_scale, vlambda, rgb_corr,
                          oor_high, oor_low, isbayer, demosaic);
@@ -497,7 +483,20 @@ void linearhdr_main(int argc, char *argv[]) {
                   << " pixels) of the image!" << endl;
     }
 
-    if (rgbe){
+    if (tsv) {
+        std::string hstring = header.str().substr(0,-1);
+        std::cout << "#?RADIANCE"  << std::endl;
+        std::cout << hstring << "NCOMP=3" << std::endl << "FORMAT=ascii" << std::endl << std::endl;
+        std::cout << "-Y " << height << "     +X " << width << std::endl;
+        int s;
+        std::cout.precision(10);
+        for (int i = 0; i < height; i++)
+            for (int j = 0; j < width; j++) {
+                s = j + i * width;
+                std::cout << std::scientific << (*Xj)(s) << "\t" << (*Yj)(s) << "\t" << (*Zj)(s) << std::endl;
+            }
+
+    } else if (rgbe){
         RGBEWriter writer( stdout, true );
         std::string hstring = header.str().substr(0,-1);
         writer.writeImage( Xj, Yj, Zj, hstring );
