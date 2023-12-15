@@ -51,6 +51,7 @@ void ConvertColor( int argc, char* argv[] ) {
     pfs::ColorSpace cs_out;;
     bool data = false;
     bool hdr = false;
+    bool radiance = true;
 
     static struct option cmdLineOptions[] = {
     { "help", no_argument, NULL, 'h' },
@@ -58,11 +59,12 @@ void ConvertColor( int argc, char* argv[] ) {
     { "colorspace", required_argument, NULL, 'c' },
     { "data", no_argument, NULL, 'd' },
     { "hdr", no_argument, NULL, 'H' },
+    { "raw", no_argument, NULL, 'r' },
     { NULL, 0, NULL, 0 }
     };
 
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "Hhvdc:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "Hhrvdc:", cmdLineOptions, &optionIndex)) != -1) {
 
         switch( c ) {
             case 'h':
@@ -80,6 +82,9 @@ void ConvertColor( int argc, char* argv[] ) {
               break;
             case 'd':
                 data = true;
+                break;
+            case 'r':
+                radiance = false;
                 break;
             default:
               throw QuietException();
@@ -137,8 +142,8 @@ void ConvertColor( int argc, char* argv[] ) {
     if (data) {
         if (hdr) {
             std::stringstream header;
-            RGBEWriter writer( stdout, true );
-            header << "RGB_CHANNELS= " << csout;
+            RGBEWriter writer( stdout, radiance );
+            header << "RGB_CHANNELS= " << csout << std::endl;
             std::string hstring = header.str();
             writer.writeImage( X, Y, Z, hstring );
         } else {

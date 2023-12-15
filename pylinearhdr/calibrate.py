@@ -52,7 +52,6 @@ def calibrate(ref, test, rc, tc, alternate=False):
     rgb_xyz = pl.pw_mtx(*cs)
     xyz_rgb = np.linalg.inv(rgb_xyz)
 
-
     cst = hdr_get_primaries(test, None, None)
     xyz_cam = io.hdr_header(test, items=["XYZCAM"])[0]
     # check if test is in a colorspace
@@ -160,6 +159,7 @@ def color_diff_uv(A, A2, total=True):
     else:
         return result
 
+
 def color_diff_yuv(A, A2, total=True):
     Auv = xyz_2_yuv(A)
     A2uv = xyz_2_yuv(A2)
@@ -208,7 +208,7 @@ def color_diff_mtx(mtx, A, B, total=True):
 def color_diff_mtx_uv(mtx, A, B, total=True):
     mtx = np.asarray(mtx).reshape(3,3)
     A2 = np.einsum('ij,jk->ik', mtx, B)
-    return color_diff(A, A2, total)
+    return color_diff_yuv(A, A2, total)
 
 
 def color_diff_mtx_xy(mtx, A, B, total=True):

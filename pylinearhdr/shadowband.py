@@ -198,12 +198,12 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
         flare2[:, np.logical_not(vm_valid)] = 0
         io.array2hdr(flare2.reshape(sdata.shape), f"{check}_src.hdr")
 
+    opxyz = translate.rotate_elem(pxyz[None], 180).ravel()
+    source = (*opxyz, srcsize, sol_luminance)
     if envmap is not None:
         skyonly = np.copy(blend)
-        opxyz = translate.rotate_elem(pxyz[None], 180).ravel()
-        source = (*opxyz, srcsize, sol_luminance)
     else:
-        skyonly = source = None
+        skyonly = None
     # draw source on image
     mask = vm.in_view(v)
     src = SrcViewPoint(None, np.asarray(pxyz).reshape(-1, 3), sol_luminance, res=1)

@@ -79,7 +79,7 @@ def hdr_data_load(ctx, param, s):
 @click.group(invoke_without_command=True)
 @click.option('-config', '-c', type=click.Path(exists=True),
               help="path of config file to load, if given, ignores profile")
-@click.option('-profile', help=f"name of saved profile to load, options: {global_profiles}")
+@click.option('-profile', '-p', help=f"name of saved profile to load, options: {global_profiles}")
 @click.option('-save',
               help="name of profile to save -config to.")
 @click.option('-n', default=None, type=int,
@@ -358,9 +358,18 @@ def run(ctx, imgs, **kwargs):
               help="align H/V images and crop by margin (aligns H->V)")
 @click.option("--fisheye/--no-fisheye", default=True,
               help="after alignment/crop reproject all inputs to angular fisheye")
+@click.option("-rawext", default="CR2",
+              help="when inputs are directories of raw files, the file extension to look for (do not include .)")
+@click.option("-bandcfg", default="D70-1SB",
+              help="config file for band image hdr merge (using pylinearhdr run) if argument includes a suffix, "
+                   "load as config, otherwise as profile")
+@click.option("-ndcfg", default="D70-1ND3",
+              help="config file for band image hdr merge (using pylinearhdr run) if argument includes a suffix, "
+                   "load as config, otherwise as profile")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-05, bw=2.0,
-               envmap=None, sunloc=None, check=None, margin=20, align=True, fisheye=True, **kwargs):
+               envmap=None, sunloc=None, check=None, margin=20, align=True, fisheye=True, rawext="CR2",
+               bandcfg="D70-1SB", ndcfg="D70-1ND3", **kwargs):
     """merge set of three images with horizontal, vertical and no shadow band all images are assumed
     to be equisolid fisheye with an extra 'margin' around 180
     to allow for H/V image alignment (unless align/fisheye are false.
@@ -380,9 +389,31 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
     """
     sbobt = (f"SHADOWBAND= roh:{roh:.03f} rov:{rov:.03f} sfov:{sfov:.03f} srcsize:{srcsize:.04f} bw:{bw:.04f} "
              f"align:{align} fisheye:{fisheye} sunloc:{sunloc} margin:{margin}")
-    hdata, hh = io.hdr2carray(imgh, header=True)
-    vdata, hv = io.hdr2carray(imgv, header=True)
-    sdata, hs = io.hdr2carray(imgn, header=True)
+
+    def _prerun(imgd, cfg):
+        imgd = imgd.rstrip("/")
+        outf = imgd + ".hdr"
+        imgs = f"{imgd}/*.{rawext}"
+        if "." in cfg:
+            runcom = f"pylinearhdr -c {cfg}"
+        else:
+            runcom = f"pylinearhdr -p {cfg}"
+        runcom += f" run '{imgs}'"
+        pipeline([runcom], outf, writemode='wb')
+        return io.hdr2carray(outf, header=True)
+
+    try:
+        hdata, hh = io.hdr2carray(imgh, header=True)
+    except ValueError:
+        hdata, hh = _prerun(imgh, bandcfg)
+    try:
+        vdata, hv = io.hdr2carray(imgv, header=True)
+    except ValueError:
+        vdata, hv = _prerun(imgv, bandcfg)
+    try:
+        sdata, hs = io.hdr2carray(imgn, header=True)
+    except ValueError:
+        sdata, hs = _prerun(imgn, ndcfg)
     if align:
         if margin < 1:
             t = slice(None, None)
@@ -412,7 +443,9 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
     blended, skyonly, source = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw,
                                              envmap=envmap, sunloc=sunloc, check=check)
     vm = ViewMapper((0.0, -1.0, 0.0), viewangle=180)
-    header = [sbobt] + hh + hv + hs + [vm.header()]
+    csp = "CENTRAL_SOURCE_PIXEL= {} {}".format(*vm.ray2pixel(source[0:3], hdata.shape[-1], False).ravel())
+    header = [sbobt, csp] + hh + hv + hs + [vm.header()]
+
     io.carray2hdr(blended, outf, header, clean=True)
     if skyonly is not None:
         srcsize = (source[3] / np.pi) ** .5 * 360/np.pi
