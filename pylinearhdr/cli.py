@@ -582,6 +582,51 @@ def vignette(ctx, img, vfile=None, **kwargs):
     io.array2hdr(imgv, None, header=[f"VIGNETTING_CORRECTION= {vfile}"] + header, clean=True)
 
 
+# @main.command()
+# @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
+# @click.option("-seq", callback=clk.are_files_iter, multiple=True,
+#               help="sequence of images with different shutter speeds that all have same region (see crop)"
+#                    " in range. give multiple sequences with different lighting or crop regions to cover a wider "
+#                    "range of shutter speeds")
+# @click.option("-crop", multiple=True,
+#               help="crop region for -seq (give multiple in same order). give as: left upper width height, note this is "
+#                    "not the same as pcompos!). Use pfsview, photoshop or other raw image viewer to determine. region"
+#                    "should be consistently lit, color neutral and in range for all images in -seq. will duplicate last"
+#                    "-crop when there are fewer than -seq. if not given at all, uses full image (not recommended)")
+# def shutter(ctx, seq=None, crop=None, **kwargs):
+#     if len(seq) == 0:
+#         print("No images given", file=sys.stderr)
+#         raise click.Abort
+#     if len(crop) == 0:
+#         crop = [None]
+#     cropargs = []
+#     for i in range(len(seq)):
+#         j = min(len(crop)-1, i)
+#         if crop[j] is None:
+#             cropargs.append("")
+#         else:
+#             ch = " ".join([str(int(int(i)/2)) for i in crop[j].strip().split()])
+#             cropargs.append(f"-crop '{ch}'")
+
+
+    # ## MAKE HDR of individual shots without any correction
+    #
+    # ru image pipe -pipe "pylinearhdr -profile calibrate run -crop '242 987 3440 3440' X" -pipe "pcomb -e 'rb=if(ri(1)-bi(1),ri(1),bi(1));g=if(gi(1)-rb,gi(1),0);lo=g' -" -x "MECH*/*.CR3"
+    #
+    # ## generate list of files (also modify to make sources_CR3.txt)
+    # ls -1 MECH*/*.hdr > sources.txt
+    # #
+    #
+    # ## calculate average values of green channel for all images
+    #
+    # ru calc pipe --stdout -pipe 'pvalue -o -b -h -d -H X' -pipe 'rcalc -e cond=$1-0.0000001;$1=$1;$2=1' -pipe 'total' -pipe 'rcalc -e $1=$1/$2;$2=$2/(3440*3440)' -x @sources.txt -sub 'a a' -suffix "" > average_val.txt
+    #
+    # pylinearhdr -profile calibrate makelist  --listonly @sources_CR3.txt 2>&1 >/dev/null |  rcalc -e 'cond=$4-50;$1=$7' | rlam average_val.txt - | rcalc -e 'cond=1-$2;$1=recno;$2=$4;$3=$2' > results.txt
+    #
+    # # normalize values (look at results.txt)
+    # rcalc -e 'a=if($1-21,$3,$3*0.0193798389/0.529009191)/0.0195192778;$1=$2;$2=a;cond=a-.5' results.txt > averages_to_fit.txt
+    #
+    # python fit.py
 
 
 @main.command()
@@ -595,12 +640,51 @@ def vignette(ctx, img, vfile=None, **kwargs):
               help='file of pixel locations corresponding to target areas in the test. each row has four numbers '
                    'x y w h, where x, y are the lower left corner. if not given script will interactively'
                    'generate. The first point should always be the "white-point"')
+@click.option("-refcol", default='rad',
+              help="reference image primaries and wp. either 8 values, predefined aliases, or colorformat. Aliases:\n"
+                   "\t rad: (0.640, 0.330, 0.290, 0.600, 0.150, 0.060, 0.3333, 0.3333)\n"
+                   "\t srgb: (0.640,  0.330,  0.300,  0.600,  0.150,  0.060, 0.3127, 0.329)\ncolorformat:\n"
+                   "\t xyz")
+@click.option("-refdataout", default=None,
+              help="if given, save reference data to this path in XYZ")
+@click.option("-testdataout", default=None,
+              help="if given, save test data to this path (in input colorspace (raw))")
 @click.option("--alternate/--no-alternate", default=False,
               help='if true and neither -rc or -tc are provided, opens both images simultaneously and expects '
                    'alternating inputs (cell 1 ref, cell 1 test, cell 2 ref, cell 2 test, etc.')
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def calibrate(ctx, reference, test, rc=None, tc=None, alternate=False, **kwargs):
-    result = cl.calibrate(reference, test, rc, tc, alternate)
+def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=False, refdataout=None, testdataout=None, **kwargs):
+    """run color luminance calibration using reference data (or image) and test hdr
+    (shutter and aperture corrected, but raw color)
+
+    Arguments
+    ---------
+
+    reference: reference color HDR or data. if data, should be tab-seperated, with rows corresponding to tc. can
+        can be either one column (luminance) or three column. If HDR or 3-column, colorspace must be
+        given with -refcol. Note that the RGB channel scaling minimization will be done in the reference colorspace.
+    test: merged hdr image of the calibration scene, should be self-calibrated for shutter and aperture, but output
+        in raw (-colorspace raw in pylinearhdr run) if rgb=True or reference data is 3-channel. otherwise
+        output in target color space (RGB or sRGB). If test was made with another program and does not have "XYZCAM"
+        header line, then
+
+    """
+    def _is_hdr(imgf):
+        f = open(imgf, 'rb')
+        ishdr = f.read(10) == b'#?RADIANCE'
+        f.close()
+        return ishdr
+
+    refimg = _is_hdr(reference)
+    if not refimg and alternate:
+        print("Warning reference is not an HDR, so setting alternate to False", file=sys.stderr)
+        alternate = False
+
+    result, A, B = cl.calibrate(reference, test, rc, tc, alternate, refimg, refcol)
+    if refdataout:
+        np.savetxt(refdataout, A.T)
+    if testdataout:
+        np.savetxt(testdataout, B.T)
     print("xyzcam matrix:")
     for k, v in result.items():
         print(f"{k}:\t" + " ".join([str(i) for i in v['xyzcam'].ravel()]))

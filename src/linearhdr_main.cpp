@@ -74,7 +74,7 @@
 using namespace std;
 
 #define PROG_NAME "linearhdr"
-#define PROG_VERSION "0.1.5"
+#define PROG_VERSION "0.1.6"
 
 inline float max(float a, float b) {
     return (a > b) ? a : b;
