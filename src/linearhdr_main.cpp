@@ -123,20 +123,19 @@ class QuietException {
 void printHelp() {
     fprintf(stderr, PROG_NAME " [Options] [exposure_list]\n"
                     "Options:\n"
-                    "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.2\n"
+                    "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.01\n"
                     "\t[--range, -r <val>]: lower range of single raw exposure, used to set lower cutoff,"
                     "\n\t\tgive as value between 0 and 0.25, default=0.01\n"
-                    "\t[--tsv, -t]: output data as tsv\n"
+                    "\t[--tsv, -t]: output data as tsv (with header for pvalue -r)\n"
                     "\t[--oor-low, -m <val>]: value to use for out of range low, default from data\n"
                     "\t[--oor-high, -x <val>]: value to use for out of range high, default from data\n"
                     "\t[--rgbs, -k '<val> <val> <val>']: rgb channel calibration default=1.0 1.0 1.0\n"
-                    "\t\toverriden by RGBcalibration in header line applies to output colorspace (after Camera2RGB in header line)\n"
+                    "\t\toverriden by RGBcalibration in header line. applies to output colorspace (after Camera2RGB in header line)\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
-                    "\t\tuse linearhdr_calibrate to calculate\n"
                     "\t[--efc, -C '<val> <val> <val> <val>']: electronic front curtain shutter correction, give as m a b c\n"
                     "\t\t to correct on image height according to the function: y = 1/((x/c+a*t)/(1+a*t))^b where t is\n"
                     "\t\t the (mechanical shutter) corrected exposure time. 'm' is the maximum exposure time to which these coefficients apply.\n"
-                    "\tgive multiple times, starting with the shortest maximum time, to apply up to three ranges of efsc.\n"
+                    "\tgive multiple times, starting with the shortest maximum time, to apply up to three ranges of efcs.\n"
                     "\t Note that if three sets are given, the last coeffs will apply to all exposure times regardless of 'm'\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
                     "\t[--bayer, -B]: expect mosaic input (rawconvert --disinterp) ignores color correction in exposure_list header\n"
@@ -148,7 +147,6 @@ void printHelp() {
                     "images are read from file formatted as:\n"
                     "\t<image1.tiff> <iso> <aperture> <exposure_time>\n"
                     "\t<image2.tiff> <iso> <aperture> <exposure_time>\n\t...\n\n"
-                    "list should be sorted by longest exposure time to shortest (only critical if --cull)\n"
                     "use/see 'pylinearhdr makelist' for an example.\n"
                     "By default, linearhdr expects exact aperture and shutter speed. so if you are making this list manually"
                     " using nominal values, be sure to use --nominal to better estimate exposure. Note the is generally"
@@ -165,7 +163,7 @@ void linearhdr_main(int argc, char *argv[]) {
 
     /* defaults */
 
-    float opt_saturation_offset_perc = 0.2;
+    float opt_saturation_offset_perc = 0.01;
     float opt_black_offset_perc = 0.01;
     float opt_scale = 1.0f;
     bool tsv = false;
@@ -439,7 +437,7 @@ void linearhdr_main(int argc, char *argv[]) {
     }
 
     if (frame_no < 1)
-        throw pfs::Exception("at least one image required for calibration (check paths in hdrgen script?)");
+        throw pfs::Exception("at least one image required for calibration");
 
 
     for (int i = 0; i < 3; i++){

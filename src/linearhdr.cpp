@@ -199,7 +199,8 @@ int linear_response(pfs::Array2D *out[],
                     }
                 }
             }
-            // just in case (not sure why...)
+            // just in case (can end up with a zero weight when finding worst color channel)
+            // but this should mean it is under-exposed
             if (div <= 0 && !all_over)
                 all_under = true;
 
@@ -222,7 +223,7 @@ int linear_response(pfs::Array2D *out[],
                 }
             }
 
-            // when operating on a demosaiced images, we want to balance to max values to luminance
+            // when operating on a demosaiced images, we want to balance max values to luminance
             // (based on the target color space)
             // store min/max luminance and running color averages
             if (!isbayer && !(all_over || all_under)) {

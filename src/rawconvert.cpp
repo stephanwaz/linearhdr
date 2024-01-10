@@ -90,7 +90,6 @@ void usage(const char *prog)
          "-K <file> Subtract dark frame (16-bit raw PGM)\n"
          "-k <num>  Set the darkness level\n"
          "-S <num>  Set the saturation level\n"
-         "-n <num>  Set threshold for wavelet denoising\n"
          "-T        Write TIFF instead of PPM (default)\n"
          "-p        Write PPM instead of TIFF\n"
          "-G        Use green_matching() filter\n"
@@ -234,6 +233,7 @@ int main(int argc, char *argv[])
   OUT.user_mul[1] = OUT.user_mul[3] = 1;
   OUT.user_mul[0] = OUT.user_mul[2] = 1;
   OUT.output_tiff = 1;
+  OUT.user_qual = 11;
   argv[argc] = (char *)"";
   for (arg = 1; (((opm = argv[arg][0]) - 2) | 2) == '+';)
   {
@@ -246,10 +246,6 @@ int main(int argc, char *argv[])
           fprintf(stderr, "Non-numeric argument to \"-%c\"\n", opt);
           return 1;
         }
-//    if (!strchr("ftdeam", opt) && argv[arg - 1][2]) {
-//      fprintf(stderr, "Unknown option \"%s\".\n", argv[arg - 1]);
-//      continue;
-//    }
     switch (opt)
     {
     case 'v':
