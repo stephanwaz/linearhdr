@@ -94,7 +94,7 @@ void usage(const char *prog)
          "-T        Write TIFF instead of PPM (default)\n"
          "-p        Write PPM instead of TIFF\n"
          "-G        Use green_matching() filter\n"
-         "-r <r g b g> Set custom white balance (used to normalize cam_xyz matrix)"
+         "-r <r g b g> Set custom white balance (used to normalize cam_xyz matrix)\n"
          "-B <x y w h> use cropbox\n"
          "-Z <suf>  Output filename generation rules\n"
          "          .suf => append .suf to input name, keeping existing suffix "

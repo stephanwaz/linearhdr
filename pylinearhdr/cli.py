@@ -17,8 +17,10 @@ import datetime
 import os
 import shutil
 import sys
+from itertools import groupby
 
 import numpy as np
+from scipy.optimize import curve_fit
 from clasp import click
 import clasp.click_ext as clk
 from clasp.script_tools import try_mkdir, clean_tmp, pipeline, sglob
@@ -203,7 +205,9 @@ shared_run_opts = [
     click.option("--verbose/--no-verbose", default=False,
                  help="passed to linearhdr"),
     click.option("--interpfirst/--interpsecond", default=True,
-                 help="interpolate with rawconvert (uses linear) or interpolate after merge (uses DHT)"),
+                 help="interpolate with rawconvert (uses DHT unless --half) or interpolate after merge (uses DHT)"),
+    click.option("--half/--no-half", default=False,
+                 help="use half-scale output from rawconvert, disables --interpsecond and --rawgrid"),
     click.option("--rawgrid/--no-rawgrid", default=False,
                  help="do not interpolate raw channels. forces -colorspace to 'raw' and ignores --interpfirst"),
     click.argument("imgs", callback=clk.are_files),
@@ -233,8 +237,11 @@ shared_run_opts = [
 def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
                  crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
                  black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
-                 interpfirst=True, premult=False, header_line=None, **kwargs):
+                 interpfirst=True, premult=False, header_line=None, half=False, **kwargs):
     """make list routine, use to generate input to linearhdr"""
+    if half:
+        interpfirst = True
+        rawgrid = False
     if header_line is None:
         header_line = []
     else:
@@ -266,13 +273,17 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
     rawcopts = '-r ' + " ".join([f"{i:.06f}" for i in multipliers]) + f" {multipliers[1]:.06f}"
     xyzcam = xyzcam * multipliers[:, None]
     rawconvertcom = pl.rawconvert_opts(imgs[0], crop=crop, bad_pixels=badpixels, rawgrid=rawgrid or (not interpfirst),
-                                       black=black, white=white, rawcopts=rawcopts)
+                                       black=black, white=white, rawcopts=rawcopts, half=half)
     tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, rawconvertcom=rawconvertcom, fo=fo,
                      shutterc=shutterc, listonly=listonly, expandarg=False, pbar=False)
     cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale)
-    # print(f"# pylinearhdr " + " ".join(sys.argv[1:]), file=outf)
-    print(f"# pylinearhdr_VERSION= {pylinearhdr.__version__}", file=outf)
     print(f"# {rawconvertcom}", file=outf)
+    print(f"# pylinearhdr_VERSION= {pylinearhdr.__version__}", file=outf)
+    if shutterc is not None:
+        print(f"# SHUTTER_CORRECTION= {shutterc}", file=outf)
+    if fo is not None:
+        fostr = " ".join([f"{i[0]},{i[1]}" for i in fo])
+        print(f"# APERTURE_OVERRIDES= {fostr}", file=outf)
     print(f"# XYZCAM= " + " ".join([f"{i:.08f}" for i in xyzcam.ravel()]), file=outf)
     print(f"# CAM_PREMULTIPLIERS= " + " ".join([f"{i:.08f}" for i in multipliers.ravel()]), file=outf)
     print("# CAPDATE= {}".format(datetime.datetime.now().strftime("%Y:%m:%d %H:%M:%S")), file=outf)
@@ -526,7 +537,7 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, **
 @click.option("--shutter/--no-shutter", default=True, help="name by shutter")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
 def rename(ctx, imgs, out=None, copy=True, aperture=True, shutter=True, iso=False, **kwargs):
-    """rename raw files based on ISO_APERTURE_SHUTTER_CCT"""
+    """rename raw files based on ISO_APERTURE_SHUTTER"""
     infos = pool_call(pl.name_by_exif, imgs, expandarg=False, prefix=out, pbar=False, aperture=aperture, shutter=shutter, iso=iso)
     copied = []
     for orig, dest in zip(imgs, infos):
@@ -582,51 +593,150 @@ def vignette(ctx, img, vfile=None, **kwargs):
     io.array2hdr(imgv, None, header=[f"VIGNETTING_CORRECTION= {vfile}"] + header, clean=True)
 
 
-# @main.command()
-# @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-# @click.option("-seq", callback=clk.are_files_iter, multiple=True,
-#               help="sequence of images with different shutter speeds that all have same region (see crop)"
-#                    " in range. give multiple sequences with different lighting or crop regions to cover a wider "
-#                    "range of shutter speeds")
-# @click.option("-crop", multiple=True,
-#               help="crop region for -seq (give multiple in same order). give as: left upper width height, note this is "
-#                    "not the same as pcompos!). Use pfsview, photoshop or other raw image viewer to determine. region"
-#                    "should be consistently lit, color neutral and in range for all images in -seq. will duplicate last"
-#                    "-crop when there are fewer than -seq. if not given at all, uses full image (not recommended)")
-# def shutter(ctx, seq=None, crop=None, **kwargs):
-#     if len(seq) == 0:
-#         print("No images given", file=sys.stderr)
-#         raise click.Abort
-#     if len(crop) == 0:
-#         crop = [None]
-#     cropargs = []
-#     for i in range(len(seq)):
-#         j = min(len(crop)-1, i)
-#         if crop[j] is None:
-#             cropargs.append("")
-#         else:
-#             ch = " ".join([str(int(int(i)/2)) for i in crop[j].strip().split()])
-#             cropargs.append(f"-crop '{ch}'")
+@main.command()
+@click.option("-seq", callback=clk.are_files_iter, multiple=True,
+              help="sequence of images with different shutter speeds that all have same region (see crop)"
+                   " in range. give multiple sequences with different lighting or crop regions to cover a wider "
+                   "range of shutter speeds")
+@click.option("-crop", multiple=True,
+              help="crop region for -seq (give multiple in same order). give as: left upper width height, note this is "
+                   "not the same as pcompos!). Use pfsview, photoshop or other raw image viewer to determine. region"
+                   "should be consistently lit, color neutral and in range for all images in -seq. will duplicate last"
+                   "-crop when there are fewer than -seq. if not given at all, uses full image (not recommended)")
+@clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
+def shutter(ctx, seq=None, crop=None, **kwargs):
+    """do relative shutter speed calibration
+
+    When multiple sequences are given, they are sorted by the
+    slowest in range shutter speed in each, then the relative
+    values are aligned via the matching shutter speeds between
+    sequences. This means that adjacent sequences must contain
+    at least one overlapping shutterspeed, and that having
+    multiple overlaps will yield a more robust alignment.
+
+    Duplicate shutter values (within and across sequences) are
+    averaged together prior to fitting, so that all shutter
+    speeds included are equally weighted in the fit. Only images
+    with 100% of pixels in range are included, so it is best to
+    carefully crop the sequences to highly homogenous regions
+    to maximize the number of in range frames.
+    """
+    if len(seq) == 0:
+        print("No images given", file=sys.stderr)
+        raise click.Abort
+    if len(crop) == 0:
+        crop = [None]
+    results = []
+    # for each sequence calculate relative factors
+    for i, sq in enumerate(seq):
+        j = min(len(crop)-1, i)
+        if crop[j] is None:
+            croparg = ""
+        else:
+            croparg = f"-crop '{crop[j]}'"
+        result = pool_call(cl.average_green, sq, croparg, expandarg=False)
+        # filter out of range
+        result = np.array([[j[0], j[2]] for j in result if j[3] > 0.99])
+        result[:, 1] = result[:, 1]
+        # sort by shutter speed
+        result = result[np.argsort(result[:, 0])]
+        # group and average by shutter speed
+        result = [[x, np.mean([yi[1] for yi in y])]
+                  for x, y in groupby(result, key=lambda x: f"{x[0]:.04f}")]
+        results.append(result)
+    # sort sequences by slowest shutter speed
+    rsort = np.argsort([float(i[0][0]) for i in results])
+    results = [results[i] for i in rsort]
+    # these are the final lists
+    shutters = [i[0] for i in results[0]]
+    vals = [i[1] for i in results[0]]
+    # scale subsequent sequences to first basis
+    for i in range(1, len(results)):
+        sf = []
+        # find overlap to determine average scale factor
+        for s, v in results[i]:
+            try:
+                si = shutters.index(s)
+            except ValueError:
+                pass
+            else:
+                sf.append(vals[si]/v)
+        if len(sf) == 0:
+            raise ValueError("sequences do not connect, at least one shutter "
+                             "speed in each sequence must appear in a"
+                             "previous (slower) sequence")
+        sf = np.average(sf)
+        shutters += [r[0] for r in results[i]]
+        vals += [r[1] * sf for r in results[i]]
+    results = np.stack(([float(i) for i in shutters], vals)).T
+    # sort by shutter speed
+    results = results[np.argsort(results[:, 0])]
+    # group and average by shutter speed
+    results = np.array([[float(x), np.mean([yi[1] for yi in y])]
+                        for x, y in groupby(results, key=lambda x: f"{x[0]:.04f}")])
+    results[:, 1] = results[:, 1] / results[0, 1]
+    coef, _ = curve_fit(lambda t,a,b: b*np.exp(a*t),  results[:, 0],  1/results[:, 1], p0=(-1e-8, 1))
+    print("# calculated average relative scaling factors")
+    for r in results:
+        print(*r)
+    print("# coefficients for exponential fit correction factor: B*e^(A*x)")
+    print("# give 'A' as argument -shutterc to 'pylinearhdr run' or linearhdr. "
+          "The 'B' coefficient can be ignored except for plotting/checking as "
+          "this is only a relative correction.", file=sys.stderr)
+    print(f"A: {coef[0]}", file=sys.stderr)
+    print(f"B: {coef[1]}", file=sys.stderr)
+    print(f"for configuration file:", file=sys.stderr)
+    print(f"shutterc = {coef[0]}", file=sys.stderr)
 
 
-    # ## MAKE HDR of individual shots without any correction
-    #
-    # ru image pipe -pipe "pylinearhdr -profile calibrate run -crop '242 987 3440 3440' X" -pipe "pcomb -e 'rb=if(ri(1)-bi(1),ri(1),bi(1));g=if(gi(1)-rb,gi(1),0);lo=g' -" -x "MECH*/*.CR3"
-    #
-    # ## generate list of files (also modify to make sources_CR3.txt)
-    # ls -1 MECH*/*.hdr > sources.txt
-    # #
-    #
-    # ## calculate average values of green channel for all images
-    #
-    # ru calc pipe --stdout -pipe 'pvalue -o -b -h -d -H X' -pipe 'rcalc -e cond=$1-0.0000001;$1=$1;$2=1' -pipe 'total' -pipe 'rcalc -e $1=$1/$2;$2=$2/(3440*3440)' -x @sources.txt -sub 'a a' -suffix "" > average_val.txt
-    #
-    # pylinearhdr -profile calibrate makelist  --listonly @sources_CR3.txt 2>&1 >/dev/null |  rcalc -e 'cond=$4-50;$1=$7' | rlam average_val.txt - | rcalc -e 'cond=1-$2;$1=recno;$2=$4;$3=$2' > results.txt
-    #
-    # # normalize values (look at results.txt)
-    # rcalc -e 'a=if($1-21,$3,$3*0.0193798389/0.529009191)/0.0195192778;$1=$2;$2=a;cond=a-.5' results.txt > averages_to_fit.txt
-    #
-    # python fit.py
+@main.command()
+@click.option("-seq", callback=clk.are_files_iter, multiple=True,
+              help="sequence of images. give once for each aperture series.")
+@click.option("-shutterc", "-sc", default=float,
+              help="exponential shutter speed correction (results will not be valid unless given. give as 0.0"
+                   " if camera has perfect shutter speed calibration.")
+@click.option("-crop",
+              help="crop region for -seq (give multiple in same order). give as: left upper width height, note this is "
+                   "not the same as pcompos!). Use pfsview, photoshop or other raw image viewer to determine. region"
+                   "should be consistently lit, color neutral and in range for all images in -seq. will duplicate last"
+                   "-crop when there are fewer than -seq. if not given at all, uses full image (not recommended)")
+@clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
+def aperture(ctx, seq=None, crop=None, shutterc=None, **kwargs):
+    """do relative aperture calibration
+
+    perform only after shutter correction. first sequence is taken as the relative reference (ie is assumed to be the
+    "correct" aperture). As each sequence is assumed to be of the same exact lighting condition, crop can only be given
+    once and applies to all sequences.
+    """
+    if len(seq) < 2:
+        print("cannot calculate aperture correction without at least two sequences", file=sys.stderr)
+        raise click.Abort
+    if shutterc is None:
+        print("-shutterc is a required option. use pylinearhdr shutter to compute", file=sys.stderr)
+        raise click.Abort
+    results = []
+    if crop is None:
+        croparg = ""
+    else:
+        croparg = f"-crop '{crop}'"
+    # for each sequence calculate average value
+    for sq in seq:
+        result = cl.average_green(" ".join(sq), croparg)
+        if result[3] < 1:
+            print(f"Warning! sequence '{sq}' does not yield an in range HDR image, {1-result[3]} is out of range",
+                  file=sys.stderr)
+        results.append([pl.info_from_exif(sq[0], False)[1], result[1], result[2]])
+    refval = results[0][2]
+    corrections = []
+    print(f"Aperture corrections based on nominal aperture F-{results[0][0]} (exact: {results[0][1]})")
+    print(f"Nominal:   Exact: Corrected:")
+    for r in results[1:]:
+        cf = np.sqrt(r[1]*r[1]*refval/r[2])
+        print(f"{r[0]:>8.03f} {r[1]:>8.03f} {cf:>10.03f}")
+        corrections.append(f"{r[0]},{round(cf,6)}")
+
+    print(f"aperture correction string (option -fo)")
+    print(f"fo = {' '.join(corrections)}")
 
 
 @main.command()
@@ -666,7 +776,8 @@ def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=Fa
     test: merged hdr image of the calibration scene, should be self-calibrated for shutter and aperture, but output
         in raw (-colorspace raw in pylinearhdr run) if rgb=True or reference data is 3-channel. otherwise
         output in target color space (RGB or sRGB). If test was made with another program and does not have "XYZCAM"
-        header line, then
+        header line, then test is assumed to be in the same color space as reference (given by -refcol). Note that even
+        if reference is greyscale, this will still apply (just not to the reference).
 
     """
     def _is_hdr(imgf):

@@ -19,6 +19,7 @@ from subprocess import Popen, PIPE
 
 import numpy as np
 from clasp import click
+from clasp.script_tools import pipeline
 
 from raytools import io
 from scipy import optimize
@@ -373,3 +374,14 @@ def load_test_cells_simul(img1, img2):
     if confirm:
         click.confirm(f'proceed?', default=True, abort=True)
     return cells1, cells2
+
+
+def average_green(img, croparg):
+    """return average green value and fraction in range for a single frame and crop area"""
+    runcom = [f"pylinearhdr run -colorspace raw -hdropts ' -m 0 -x 0 --tsv' --half {croparg} '{img}'",
+              "getinfo -d -", "rcalc -e '$1=$2;cond=$2;$2=1'", 'total -m']
+    info = list(pl.info_from_exif(img.split()[0], True, False))
+    result = [float(i) for i in pipeline(runcom).strip().split()]
+    if len(result) != 2:
+        result = [0.0, 0.0]
+    return info[0:2] + result

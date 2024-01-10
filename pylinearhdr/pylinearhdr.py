@@ -170,7 +170,7 @@ def process_dcraw_opt(val, img, callexif=True, avg=False):
 
 
 def rawconvert_opts(img, crop=None, bad_pixels=None, rawgrid=False, black="PerChannelBlackLevel",
-                    white="LinearityUpperMargin", rawcopts=''):
+                    white="LinearityUpperMargin", rawcopts='', half=False):
     black = process_dcraw_opt(black, img, avg=True)
     white = process_dcraw_opt(white, img, avg=True)
     cs = ""
@@ -178,7 +178,9 @@ def rawconvert_opts(img, crop=None, bad_pixels=None, rawgrid=False, black="PerCh
         cs = "-B {} {} {} {}".format(*crop)
     if bad_pixels is not None:
         cs += f" -P {bad_pixels}"
-    if rawgrid:
+    if half:
+        cs += " -h"
+    elif rawgrid:
         cs += " -disinterp"
     else:
         cs += " -q 11"
