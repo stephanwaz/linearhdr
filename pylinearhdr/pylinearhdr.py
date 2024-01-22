@@ -166,7 +166,7 @@ def process_dcraw_opt(val, img, callexif=True, avg=False):
         rawinfo = Popen(shlex.split(f"exiftool -{val} -s {img}"),
                         stdout=PIPE).communicate()[0].decode(sys.stdin.encoding).split(":", 1)[1].strip()
         return process_dcraw_opt(rawinfo, img, False, avg)
-    raise ValueError(f"Bad option given '{val}' could not be processed as a exiftool parameter")
+    raise ValueError(f"Bad option given '{val}' could not be processed as an exiftool parameter")
 
 
 def rawconvert_opts(img, crop=None, bad_pixels=None, rawgrid=False, black="PerChannelBlackLevel",

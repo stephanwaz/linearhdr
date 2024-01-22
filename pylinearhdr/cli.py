@@ -260,7 +260,7 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         shell = False
         overwrite = False
     elif callhdr:
-        outfn = clean_tmp(ctx)
+        outfn = clean_tmp(ctx).rsplit("/", 1)[-1]
         outf = open(outfn, 'w')
         if not correct:
             hdropts += " --nominal"
@@ -432,9 +432,9 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
         else:
             t = slice(margin, -margin)
         xo, yo = sb.align_images(hdata[0, t, t], vdata[0, t, t])
+        sdata = sdata[:, t, t]
+        vdata = vdata[:, t, t]
         if np.sum(np.abs((xo, yo))) > 0:
-            sdata = sdata[:, t, t]
-            vdata = vdata[:, t, t]
             xt = slice(max(0, margin + xo), min(hdata.shape[1], xo + hdata.shape[1] - margin))
             yt = slice(max(0, margin + yo), min(hdata.shape[2], yo + hdata.shape[2] - margin))
             xt2 = slice(0, xt.stop-xt.start)
@@ -443,6 +443,8 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
             hdata2[:, xt2, yt2] = hdata[:, xt, yt]
             hdata = hdata2
             hh.append(f"\tSHADOWBAND_IMAGE_ALIGN= {xo} {yo}")
+        else:
+            hdata = hdata[:, t, t]
         margin = 0
     if fisheye:
         if margin > 0:
@@ -799,6 +801,24 @@ def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=Fa
     print("xyzcam matrix:")
     for k, v in result.items():
         print(f"{k}:\t" + " ".join([str(i) for i in v['xyzcam'].ravel()]))
+
+
+@main.command()
+@click.argument("test", callback=clk.is_file)
+@click.option("-tc", callback=clk.is_file,
+              help='file of pixel locations corresponding to target areas in the test. each row has four numbers '
+                   'x y w h, where x, y are the lower left corner. if not given script will interactively'
+                   'generate.')
+@click.option("-outf",
+              help='data file to write. if not given, defaults to input + ".txt"')
+@clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
+def getimgdata(ctx, test, tc=None, outf=None, **kwargs):
+    """get average squares of data from hdr"""
+    if outf is None:
+        outf = test + ".txt"
+    tcells = cl.load_test_cells(test, tc)
+    testd = cl.load_data(test, tcells)
+    np.savetxt(outf, testd.T)
 
 
 @main.command()
