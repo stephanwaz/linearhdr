@@ -74,7 +74,7 @@
 using namespace std;
 
 #define PROG_NAME "linearhdr"
-#define PROG_VERSION "0.1.8"
+#define PROG_VERSION "0.1.9 (compiled on: " __DATE__ " @ " __TIME__ ")"
 
 inline float max(float a, float b) {
     return (a > b) ? a : b;
@@ -122,6 +122,7 @@ class QuietException {
 
 void printHelp() {
     fprintf(stderr, PROG_NAME " [Options] [exposure_list]\n"
+                    "Version: " PROG_VERSION "\n"
                     "Options:\n"
                     "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.01\n"
                     "\t[--range, -r <val>]: lower range of single raw exposure, used to set lower cutoff,"
@@ -137,6 +138,7 @@ void printHelp() {
                     "\t\t the (mechanical shutter) corrected exposure time. 'm' is the maximum exposure time to which these coefficients apply.\n"
                     "\tgive multiple times, starting with the shortest maximum time, to apply up to three ranges of efcs.\n"
                     "\t Note that if three sets are given, the last coeffs will apply to all exposure times regardless of 'm'\n"
+                    "\t t*a*x**2 + t*b*x + 1+t*c\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
                     "\t[--bayer, -B]: expect mosaic input (rawconvert --disinterp) ignores color correction in exposure_list header\n"
                     "\t[--debayer, -D]: interpolate hdr output, overrides --bayer, but expects same input (rawconvert --disinterp)\n"
@@ -397,14 +399,20 @@ void linearhdr_main(int argc, char *argv[]) {
             if (info.etime < efcr[i])
                 break;
         }
+
         int s;
         float efcc;
+        float pheight;
         for (int i = 0; i < height; i++)
             for (int j = 0; j < width; j++) {
                 s = j + i * width;
                 // apply electronic front curtain shutter correction
-                if (efc[efci][0] > 0){
-                    efcc = 1/pow(((height-i) / efc[efci][2] + efc[efci][0] * info.etime)/(1 + efc[efci][0] * info.etime), efc[efci][1]);
+                if (efc[efci][0] != 0){
+                    // old (v0.1.8) efcc
+//                     efcc = 1/pow(((height-i) / efc[efci][2] + efc[efci][0] * info.etime)/(1 + efc[efci][0] * info.etime), efc[efci][1]);
+                    // new efcc
+                    pheight = height - i;
+                    efcc = 1 / (1 + (efc[efci][0]*pheight*pheight + efc[efci][1]*pheight + efc[efci][2]) / info.etime);
                     (*eR.yi)(s) = efcc_corr((*X)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
                     (*eG.yi)(s) = efcc_corr((*Y)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
                     (*eB.yi)(s) = efcc_corr((*Z)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);

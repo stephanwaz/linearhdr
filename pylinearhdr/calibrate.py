@@ -135,15 +135,18 @@ def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad'):
     return result, refd, B
 
 
-def load_data(img, cells):
+def load_data(img, cells, zero=False):
     if cells is None:
         return np.loadtxt(img).T
     img = io.hdr2carray(img) * 179
     data = []
     for cell in cells:
         x1, y1, x2, y2 = cell
-        rgb = np.average(img[:, x1:x1+x2, y1:y1+y2], axis=(1, 2))
-        data.append(rgb)
+        if zero and np.any(img[:, x1:x1+x2, y1:y1+y2] == 0):
+            data.append(np.zeros(3))
+        else:
+            rgb = np.average(img[:, x1:x1+x2, y1:y1+y2], axis=(1, 2))
+            data.append(rgb)
     return np.asarray(data).T
 
 
@@ -341,10 +344,10 @@ def load_test_cells(img, outf):
         os.remove(outf)
         return load_test_cells(img, outf)
     cellarea = cells[:, 2] * cells[:, 3]
-    print(f"statistics for {len(cells)} cells in {outf}:")
-    print(f"width (min, med, max): {np.percentile(cells[:, 2], (0, 50, 100))}")
-    print(f"height (min, med, max): {np.percentile(cells[:, 3], (0, 50, 100))}")
-    print(f"area (min, med, max): {np.percentile(cellarea, (0, 50, 100))}")
+    print(f"statistics for {len(cells)} cells in {outf}:", file=sys.stderr)
+    print(f"width (min, med, max): {np.percentile(cells[:, 2], (0, 50, 100))}", file=sys.stderr)
+    print(f"height (min, med, max): {np.percentile(cells[:, 3], (0, 50, 100))}", file=sys.stderr)
+    print(f"area (min, med, max): {np.percentile(cellarea, (0, 50, 100))}", file=sys.stderr)
     if confirm:
         click.confirm(f'proceed?', default=True, abort=True)
     return cells

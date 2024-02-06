@@ -189,10 +189,7 @@ shared_run_opts = [
                  help="if given, sets --correct to True. for correcting shutter speed. takes a single value 'A' "
                       "interpreted as: shutter=x*exp(A*x),  where x is the corrected (true power of 2) shutter speed. "
                       "this curve can be derived from a  sequence of hdr images using single files taken with "
-                      "different shutter speeds. fit the function y=exp(A*x) where y = lum_s0/lum_st and lum_s0 is "
-                      "the luminance of the  target at the longest exposure time. this can be done with an "
-                      "exponential trendline in excel (make sure set intercept=1), or with "
-                      "scipy.optimize.curve_fit(lambda t,a: np.exp(a*t),  x,  y, p0=(-1e-8,))"),
+                      "different shutter speeds. see the command 'pylinearhdr shutter'"),
     click.option("-scale", default=1.0,
                  help="calibration scale factor (applies to ISO, so do not use -s with linearhdr)"),
     click.option("-cscale", callback=clk.split_float,
@@ -340,9 +337,9 @@ def run(ctx, imgs, **kwargs):
 
 
 @main.command()
-@click.argument("imgh", callback=clk.is_file)
-@click.argument("imgv", callback=clk.is_file)
-@click.argument("imgn", callback=clk.is_file)
+@click.argument("imgh", callback=clk.are_files)
+@click.argument("imgv", callback=clk.are_files)
+@click.argument("imgn", callback=clk.are_files)
 @click.option("-outf", default="blended.hdr",
               help="output destination")
 @click.option("-roh", default=0.0,
@@ -401,30 +398,42 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
     sbobt = (f"SHADOWBAND= roh:{roh:.03f} rov:{rov:.03f} sfov:{sfov:.03f} srcsize:{srcsize:.04f} bw:{bw:.04f} "
              f"align:{align} fisheye:{fisheye} sunloc:{sunloc} margin:{margin}")
 
-    def _prerun(imgd, cfg):
-        imgd = imgd.rstrip("/")
-        outf = imgd + ".hdr"
-        imgs = f"{imgd}/*.{rawext}"
+    def _prerun0(outf0, imgs0, cfg):
         if "." in cfg:
             runcom = f"pylinearhdr -c {cfg}"
         else:
             runcom = f"pylinearhdr -p {cfg}"
-        runcom += f" run '{imgs}'"
-        pipeline([runcom], outf, writemode='wb')
-        return io.hdr2carray(outf, header=True)
+        runcom += f" run '{imgs0}'"
+        pipeline([runcom], outf0, writemode='wb')
+        return io.hdr2carray(outf0, header=True)
+
+    def _prerun(imgd, cfg):
+        imgd = imgd.rstrip("/")
+        outf = imgd + ".hdr"
+        imgs = f"{imgd}/*.{rawext}"
+        return _prerun0(outf, imgs, cfg)
 
     try:
-        hdata, hh = io.hdr2carray(imgh, header=True)
+        if len(imgh) > 1:
+            hdata, hh = _prerun0(outf.rsplit(".", 1)[0] + "_H.hdr", " ".join(imgh), bandcfg)
+        else:
+            hdata, hh = io.hdr2carray(imgh[0], header=True)
     except ValueError:
-        hdata, hh = _prerun(imgh, bandcfg)
+        hdata, hh = _prerun(imgh[0], bandcfg)
     try:
-        vdata, hv = io.hdr2carray(imgv, header=True)
+        if len(imgh) > 1:
+            vdata, vv = _prerun0(outf.rsplit(".", 1)[0] + "_V.hdr", " ".join(imgv), bandcfg)
+        else:
+            vdata, hv = io.hdr2carray(imgv[0], header=True)
     except ValueError:
-        vdata, hv = _prerun(imgv, bandcfg)
+        vdata, hv = _prerun(imgv[0], bandcfg)
     try:
-        sdata, hs = io.hdr2carray(imgn, header=True)
+        if len(imgn) > 1:
+            sdata, hs = _prerun0(outf.rsplit(".", 1)[0] + "_ND.hdr", " ".join(imgn), ndcfg)
+        else:
+            sdata, hs = io.hdr2carray(imgn[0], header=True)
     except ValueError:
-        sdata, hs = _prerun(imgn, ndcfg)
+        sdata, hs = _prerun(imgn[0], ndcfg)
     if align:
         if margin < 1:
             t = slice(None, None)
@@ -605,8 +614,10 @@ def vignette(ctx, img, vfile=None, **kwargs):
                    "not the same as pcompos!). Use pfsview, photoshop or other raw image viewer to determine. region"
                    "should be consistently lit, color neutral and in range for all images in -seq. will duplicate last"
                    "-crop when there are fewer than -seq. if not given at all, uses full image (not recommended)")
+@click.option("-dataout",
+              help="if given, save full data to this file")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def shutter(ctx, seq=None, crop=None, **kwargs):
+def shutter(ctx, seq=None, crop=None, dataout=None, **kwargs):
     """do relative shutter speed calibration
 
     When multiple sequences are given, they are sorted by the
@@ -629,6 +640,7 @@ def shutter(ctx, seq=None, crop=None, **kwargs):
     if len(crop) == 0:
         crop = [None]
     results = []
+    alldata = []
     # for each sequence calculate relative factors
     for i, sq in enumerate(seq):
         j = min(len(crop)-1, i)
@@ -639,9 +651,10 @@ def shutter(ctx, seq=None, crop=None, **kwargs):
         result = pool_call(cl.average_green, sq, croparg, expandarg=False)
         # filter out of range
         result = np.array([[j[0], j[2]] for j in result if j[3] > 0.99])
-        result[:, 1] = result[:, 1]
+        print(f"sequence {i}: {len(result)} out of {len(sq)} frames in range", file=sys.stderr)
         # sort by shutter speed
         result = result[np.argsort(result[:, 0])]
+        alldata.append(result)
         # group and average by shutter speed
         result = [[x, np.mean([yi[1] for yi in y])]
                   for x, y in groupby(result, key=lambda x: f"{x[0]:.04f}")]
@@ -649,9 +662,11 @@ def shutter(ctx, seq=None, crop=None, **kwargs):
     # sort sequences by slowest shutter speed
     rsort = np.argsort([float(i[0][0]) for i in results])
     results = [results[i] for i in rsort]
+    alldata = [alldata[i] for i in rsort]
     # these are the final lists
     shutters = [i[0] for i in results[0]]
     vals = [i[1] for i in results[0]]
+    alldata_s = [alldata[0]]
     # scale subsequent sequences to first basis
     for i in range(1, len(results)):
         sf = []
@@ -670,14 +685,29 @@ def shutter(ctx, seq=None, crop=None, **kwargs):
         sf = np.average(sf)
         shutters += [r[0] for r in results[i]]
         vals += [r[1] * sf for r in results[i]]
+        s_data = np.copy(alldata[i])
+        s_data[:, 1] *= sf
+        alldata_s.append(s_data)
+    alldata = np.vstack(alldata_s)
+    alldata = alldata[np.argsort(alldata[:, 0])]
     results = np.stack(([float(i) for i in shutters], vals)).T
     # sort by shutter speed
-    results = results[np.argsort(results[:, 0])]
+    results_p = results[np.argsort(results[:, 0])]
     # group and average by shutter speed
     results = np.array([[float(x), np.mean([yi[1] for yi in y])]
-                        for x, y in groupby(results, key=lambda x: f"{x[0]:.04f}")])
-    results[:, 1] = results[:, 1] / results[0, 1]
+                        for x, y in groupby(results_p, key=lambda x: f"{x[0]:.04f}")])
+    bm = results[0, 1]
+    results[:, 1] = results[:, 1] / bm
     coef, _ = curve_fit(lambda t,a,b: b*np.exp(a*t),  results[:, 0],  1/results[:, 1], p0=(-1e-8, 1))
+    if dataout is not None:
+        f = open(dataout, 'w')
+        print("shutter\tfit\tavg\tsamples", file=f)
+        for r, (x, y) in zip(results, groupby(alldata, key=lambda x: f"{x[0]:.04f}")):
+            samples = [bm/yi[1] for yi in y]
+            avg = 1/r[1]
+            efit = coef[1]*np.exp(coef[0]*float(x))
+            print(f"{x}\t{efit}\t{avg}\t" + "\t".join([f"{yi}" for yi in samples]), file=f)
+        f.close()
     print("# calculated average relative scaling factors")
     for r in results:
         print(*r)
@@ -811,14 +841,22 @@ def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=Fa
                    'generate.')
 @click.option("-outf",
               help='data file to write. if not given, defaults to input + ".txt"')
+@click.option("--stdout/--no-stdout", default=False,
+              help='overrides outf, print to stdout')
+@click.option("--zero/--no-zero", default=False,
+              help='if area includes zeros, return zero for whole area')
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def getimgdata(ctx, test, tc=None, outf=None, **kwargs):
+def getimgdata(ctx, test, tc=None, outf=None, stdout=False, zero=False, **kwargs):
     """get average squares of data from hdr"""
     if outf is None:
         outf = test + ".txt"
     tcells = cl.load_test_cells(test, tc)
-    testd = cl.load_data(test, tcells)
-    np.savetxt(outf, testd.T)
+    testd = cl.load_data(test, tcells, zero=zero)
+    if stdout:
+        for d in testd.T:
+            print("\t".join([f"{i:.03f}" for i in d]))
+    else:
+        np.savetxt(outf, testd.T)
 
 
 @main.command()
