@@ -40,31 +40,41 @@ def hdr_get_primaries(img, defp=(0.640, 0.330, 0.290, 0.600, 0.150, 0.060),
     return pri
 
 
-def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad'):
+def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad', testimg=True, minimizer='luv'):
+    minfuncdict = dict(luv=color_diff_mtx_uv, lab=color_diff_mtx)
+    minfunc = minfuncdict[minimizer]
+    rcells = None
+    tcells = None
     if alternate and rc is None and tc is None:
         rcells, tcells = load_test_cells_simul(ref, test)
     else:
         if refimg:
             rcells = load_test_cells(ref, rc)
-        else:
-            rcells = None
-        tcells = load_test_cells(test, tc)
+        if testimg:
+            tcells = load_test_cells(test, tc)
     refd = load_data(ref, rcells)
     testd = load_data(test, tcells)
 
     # get reference colorspace
     rgb_xyz, _ = pl.prep_color_transform(refcol, 'xyz')
     xyz_rgb = np.linalg.inv(rgb_xyz)
-
-
-    cst = hdr_get_primaries(test, None, None)
-    xyz_cam = io.hdr_header(test, items=["XYZCAM"])[0]
+    if testimg:
+        cst = hdr_get_primaries(test, None, None)
+        xyz_cam = io.hdr_header(test, items=["XYZCAM"])[0]
+    else:
+        cst = (None, None)
+        xyz_cam = []
     # check if test is in a colorspace
     if cst[0] is not None:
         cam_xyz = pl.pw_mtx(*cst)
     # check in test has initial transform matrix
     elif len(xyz_cam) > 0:
         xyz_cam = np.array([float(i) for i in xyz_cam.split()]).reshape(3, 3)
+        premult = io.hdr_header(test, items=["CAM_PREMULTIPLIERS"])[0]
+        if len(premult) > 0:
+            premult = np.array([float(i) for i in premult.split()])[:, None]
+            testd = testd / premult
+            xyz_cam = xyz_cam / premult
         cam_xyz = np.linalg.inv(xyz_cam)
     # assume test is in same space as reference
     else:
@@ -81,8 +91,8 @@ def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad'):
         B_y = np.einsum('ij,jk->ik', cam_xyz, B)[1]
         lum_scale = np.linalg.lstsq(B_y[:, None], refd, rcond=None)[0][0]
 
-        result = dict(start=dict(xyzcam=np.linalg.inv(cam_xyz)),
-                      lum=dict(xyzcam=np.linalg.inv(cam_xyz * lum_scale)))
+        result = dict(start=dict(xyzcam=np.linalg.inv(cam_xyz), label="Default Matrix"),
+                      lum=dict(xyzcam=np.linalg.inv(cam_xyz * lum_scale), label="Luminance Least Squares"))
 
         print("************************* RESULTS *************************")
         for k, v in result.items():
@@ -98,7 +108,6 @@ def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad'):
         # luminance scaling:
         B_xyz = np.einsum('ij,jk->ik', cam_xyz, B)
         lum_scale = np.linalg.lstsq(B_xyz[1][:, None], A[1], rcond=None)[0][0]
-
         # reference channel scaling:
         B_rgb = np.einsum('ij,jk->ik', xyz_rgb, B_xyz)
         rf = np.linalg.lstsq(B_rgb[0][:, None], refd[0], rcond=None)[0]
@@ -109,50 +118,81 @@ def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad'):
         # linear color matrix optimization:
         cam_xyz_opt = np.linalg.solve((B@B.T).T, (A@B.T).T).T
         # non-linear color matrix optimization:
-        cam_xyz_opt2 = optimize.minimize(color_diff_mtx, cam_xyz_opt.ravel(), args=(A, B),
+        cam_xyz_opt2 = optimize.minimize(minfunc, cam_xyz_opt.ravel(), args=(A, B),
                                          method='SLSQP', options=dict(maxiter=100)).x.reshape(3, 3)
 
-        result = dict(start=dict(xyzcam=np.linalg.inv(cam_xyz)),
-                      lum=dict(xyzcam=np.linalg.inv(cam_xyz * lum_scale)),
-                      rgb=dict(xyzcam=np.linalg.inv(cam_xyz * rgb_scale[:, None])),
-                      lopt=dict(xyzcam=np.linalg.inv(cam_xyz_opt)),
-                      nopt=dict(xyzcam=np.linalg.inv(cam_xyz_opt2)))
+        result = dict(start=dict(xyzcam=np.linalg.inv(cam_xyz), label="Default Matrix"),
+                      lum=dict(xyzcam=np.linalg.inv(cam_xyz * lum_scale), label="Luminance Least Squares"),
+                      rgb=dict(xyzcam=np.linalg.inv(cam_xyz * rgb_scale[:, None]), label="RGB Least Squares"),
+                      lopt=dict(xyzcam=np.linalg.inv(cam_xyz_opt), label="Color Matrix Optimization"),
+                      nopt=dict(xyzcam=np.linalg.inv(cam_xyz_opt2), label=f"Color Matrix SLSQP Minimization ({minimizer})"))
 
-        print("************************* RESULTS *************************")
+        print("********************************** RESULTS *********************************")
         for k, v in result.items():
             B_xyz = np.einsum('ij,jk->ik', np.linalg.inv(v['xyzcam']), B)
             v['dlab'] = color_diff_lab(A, B_xyz)
             v['duv'] = color_diff_uv(A, B_xyz)
             v['dxy'] = color_diff_xy(A, B_xyz)
+            v['dlum'] = rel_lum_diff(A[1], B_xyz[1], signed=True)
             v['dlab_full'] = color_diff_lab(A, B_xyz, False)
-            v['duv_full'] = color_diff_uv(A, B_xyz, False)
+            v['duv_full'] = color_diff_yuv(A, B_xyz, False)
             v['dxy_full'] = color_diff_xy(A, B_xyz, False)
-            print(f"diff for {k}:\tlab:{v['dlab']:.05f}\tuv:{v['duv']:.05f}\txy:{v['dxy']:.05f}")
-        print("***********************************************************")
+            print(f"diff for {k}:\tlab:{v['dlab']:.05f}\tuv:{v['duv']:.05f}\txy:{v['dxy']:.05f}\tlumMSD:{v['dlum']:.02%}")
+        print("****************************************************************************")
 
     # print(result['lopt']['dlab_full'])
     np.set_printoptions(**popts)
     return result, refd, B
 
 
-def load_data(img, cells, zero=False):
+def load_data(imgf, cells, zero=False, lum=False, checkimg=None, mean=True, stdev=False, scale=179):
+    lumrgb = [0.265, 0.670, 0.065]
     if cells is None:
-        return np.loadtxt(img).T
-    img = io.hdr2carray(img) * 179
+        return np.loadtxt(imgf).T
+    img = io.hdr2carray(imgf) * scale
+    if lum:
+        lumrgbi = io.hdr_header(imgf, items=['LuminanceRGB'])[0]
+        if len(lumrgbi) > 0:
+            lumrgb = [float(i) for i in lumrgbi.split()]
+        lumd = np.einsum('ijk,i->jk', img, lumrgb)[None]
+        img = np.concatenate((lumd, img), axis=0)
     data = []
+    data2 = []
+    mask = np.zeros_like(img)
     for cell in cells:
         x1, y1, x2, y2 = cell
+        mask[:, x1:x1+x2, y1:y1+y2] += 1
         if zero and np.any(img[:, x1:x1+x2, y1:y1+y2] == 0):
-            data.append(np.zeros(3))
+            data.append(np.zeros(img.shape[0]))
         else:
             rgb = np.average(img[:, x1:x1+x2, y1:y1+y2], axis=(1, 2))
             data.append(rgb)
-    return np.asarray(data).T
+        data2.append(np.std(img[:, x1:x1+x2, y1:y1+y2], axis=(1, 2)))
+    if checkimg is not None:
+        io.carray2hdr(mask * img / 179, checkimg, header=io.hdr_header(imgf, True))
+    od = []
+    if mean:
+        od.append(np.asarray(data).T)
+    if stdev:
+        od.append(np.asarray(data2).T)
+    if mean or stdev:
+        od = np.vstack(od)
+    return od
 
 
 def xyz_2_xy(xyz):
     d = np.sum(xyz, axis=0)
     return xyz[0:2]/d
+
+
+def xy_2_uv(x,y):
+    d = -2*x + 12 * y + 3
+    return 4*x/d, 9*y/d
+
+
+def uv_2_xy(u, v):
+    d = 6*u - 16 * v + 12
+    return 9 * u/d, 4*v/d
 
 
 def xyz_2_yuv(xyz):
@@ -199,18 +239,34 @@ def color_diff_yuv(A, A2, total=True):
     else:
         return result
 
-def rel_lum_diff(A, A2, total=True):
+
+def rel_lum_diff(A, A2, total=True, signed=False):
     result = (A2 - A)/A
     if total:
-        return np.sqrt(np.average(np.square(result)))
+        if signed:
+            return np.average(result)
+        else:
+            return np.sqrt(np.average(np.square(result)))
     else:
         return result
 
+
+def lum_diff(A, A2, total=True, signed=False):
+    result = (A2 - A)
+    if total:
+        if signed:
+            return np.average(result)
+        else:
+            return np.sqrt(np.average(np.square(result)))
+    else:
+        return result
+
+
 def color_diff_lab(A, A2, total=True):
     if A[1, 0] > A2[1, 0]:
-        wp = A[:, 0] * 1.2
+        wp = A[:, 0]
     else:
-        wp = A2[:, 0] * 1.2
+        wp = A2[:, 0]
     la = xyz_2_lab(A, wp)
     la2 = xyz_2_lab(A2, wp)
     jnd = 2.3
@@ -379,9 +435,9 @@ def load_test_cells_simul(img1, img2):
     return cells1, cells2
 
 
-def average_green(img, croparg):
+def average_green(img, croparg, runopts=""):
     """return average green value and fraction in range for a single frame and crop area"""
-    runcom = [f"pylinearhdr run -colorspace raw -hdropts ' -m 0 -x 0 --tsv' --half {croparg} '{img}'",
+    runcom = [f"pylinearhdr run {runopts} -colorspace raw -hdropts ' -m 0 -x 0 --tsv' --half {croparg} '{img}'",
               "getinfo -d -", "rcalc -e '$1=$2;cond=$2;$2=1'", 'total -m']
     info = list(pl.info_from_exif(img.split()[0], True, False))
     result = [float(i) for i in pipeline(runcom).strip().split()]

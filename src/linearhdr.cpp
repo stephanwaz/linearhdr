@@ -88,11 +88,14 @@ float get_exposure_compensationX(const Exposure &ex) {
     return  100.0f * ex.aperture * ex.aperture / ( ex.exposure_time * ex.iso );
 }
 
-// a noise weighted and smooth hat function (made as a piece-wise logistic), with defaults peak is at 0.69
-float get_weight(const double x, const double b = 25, const double m = 5){
-    // w[i] = eG.exposure_time;
+// Poisson Photon Noise Estimator(PPNE) with rounded peak to reduce
+float get_weight(const Exposure &ex, const double x, const double s){
+    // old hat function:
     // y\ =\ \frac{1}{1+e^{-b\cdot\min\left(1-x,x\right)+m}}
-    return x / (1+ std::exp(-b * min(1-x, x) + m));
+//    return ex.exposure_time / (1+ std::exp(-25 * min(1-x, x) + 5));
+    // new PPNE with easing at top
+    // y\ =\ \frac{\max\left(x-t,0\right)}{1+3e^{-\frac{\left(1-s-x\right)}{.02}}}
+    return ex.exposure_time  / (1+ 3*std::exp(-(1-x-s)/0.02));
 }
 
 void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3]) {
@@ -105,17 +108,17 @@ void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3
     (*out[2])(j) = max(0, x * rgb_corr[2][0] + y * rgb_corr[2][1] + z * rgb_corr[2][2]);
 }
 
-int linear_response(pfs::Array2D *out[],
-                   const ExposureList *imgs[],
-                   const float opt_saturation_offset,
-                   const float opt_black_offset,
-                   const float scale,
-                   const float vlambda[3],
-                   const float rgb_corr[3][3],
-                   const float oor_high,
-                   float oor_low,
-                   bool isbayer,
-                   const bool demosaic){
+std::tuple<long, long> linear_response(pfs::Array2D *out[],
+                                     const ExposureList *imgs[],
+                                     const float opt_saturation_offset,
+                                     const float opt_black_offset,
+                                     const float scale,
+                                     const float vlambda[3],
+                                     const float rgb_corr[3][3],
+                                     const float oor_high,
+                                     float oor_low,
+                                     bool isbayer,
+                                     const bool demosaic){
 
     // governs primary merging, do we check all color channels, or merge channels independently
     isbayer = isbayer or demosaic;
@@ -186,7 +189,7 @@ int linear_response(pfs::Array2D *out[],
                 for (int cc = ccf; cc < 3; cc += cinc) {
                     X[cc][n] = (*(*imgs[cc])[n].yi)(k) * get_exposure_compensationX((*imgs[cc])[n]) * scale;
                     // weight by worst color channel
-                    w[n] = min(w[n], get_weight((*(*imgs[cc])[n].yi)(k)));
+                    w[n] = min(w[n], get_weight((*imgs[cc])[n], (*(*imgs[cc])[n].yi)(k), opt_saturation_offset));
                     saturated_exp = ((*(*imgs[cc])[n].yi)(k) >= 1 - opt_saturation_offset) || saturated_exp;
                     under_exp = ((*(*imgs[cc])[n].yi)(k) <= opt_black_offset) || under_exp;
                 }
@@ -314,9 +317,5 @@ int linear_response(pfs::Array2D *out[],
     VERBOSE_STR << "Maximum Value: " << mmax[0] << ", " << mmax[1] << ", " << mmax[2] << ", " << lummax << std::endl;
     VERBOSE_STR << "Minimum Value: " << mmin[0] << ", " << mmin[1] << ", " << mmin[2] << ", " << lummin << std::endl;
 
-    if (under_pixels > 0) {
-        float perc = ceilf(100.0f * under_pixels / NP);
-        VERBOSE_STR << "under-exposed pixels found in " << perc << "% of the image!" << endl;
-    }
-    return saturated_pixels;
+    return {saturated_pixels, under_pixels};
 }

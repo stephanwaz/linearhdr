@@ -58,6 +58,7 @@
 #include <vector>
 #include <array2d.h>
 #include <pfs.h>
+#include <tuple>
 
 /**
  * @brief Container for images taken with different exposures
@@ -82,18 +83,17 @@ public:
  */
 typedef std::vector<Exposure> ExposureList;
 
-
-int linear_response(pfs::Array2D *rgb_out[],
-                    const ExposureList *imgs[],
-                    const float opt_saturation_offset,
-                    const float opt_black_offset,
-                    const float scale,
-                    const float vlambda[3],
-                    const float rgb_corr[3][3],
-                    const float oor_high = -1,
-                    const float oor_low = -1,
-                    bool isbayer = false,
-                    const bool demosaic = false);
+std::tuple<long, long> linear_response(pfs::Array2D *rgb_out[],
+                                    const ExposureList *imgs[],
+                                    const float opt_saturation_offset,
+                                    const float opt_black_offset,
+                                    const float scale,
+                                    const float vlambda[3],
+                                    const float rgb_corr[3][3],
+                                    const float oor_high = -1,
+                                    const float oor_low = -1,
+                                    bool isbayer = false,
+                                    const bool demosaic = false);
 
 void dht_interpolate(pfs::Array2D *Xj, pfs::Array2D *Yj, pfs::Array2D *Zj);
 

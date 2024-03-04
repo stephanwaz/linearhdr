@@ -130,7 +130,6 @@ if [ "$rgb" == "rgb" ]; then
         rcal='grey(r,g,b):.265074126*r+.670114631*g+.064811243*b;$1=grey($1,$2,$3)*179;$2=$1*179;$3=$2*179;$4=$3*179;'
     fi
     rcalf='$1=$5*recno;$2=$6;$3=$7;$4=$8;$5=$9;$6=$1;$7=$2;$8=$3;$9=$4'
-    ncomp="-fa3"
 else
     pval="-o -b -h -H -d"
     if [ "$type" == "c" ]; then
@@ -138,9 +137,8 @@ else
     else
         rcal='$1=$1*179;'
     fi
-    
+
     rcalf='$1=$2*recno;$2=$3;$3=$1'
-    ncomp="-fa1"
 fi
 
 if [ "$type" == "v" ]; then
@@ -149,16 +147,19 @@ if [ "$type" == "v" ]; then
         exit 0
     fi
     datac=$((${A[2]}*${A[3]}))
-    pcompos -x ${A[2]} -y ${A[3]} $amg -${A[0]} -${A[1]} | pvalue -o -b -h -H -d | rcollate -ic 1 -ir $datac -or ${A[3]} -oc ${A[2]} -hi -fa1 | rcollate -ho -t | total -m | rcollate -oc 1 -or ${A[3]} -hi -fa1 -ho > "$basename"_ang.txt
-    pcompos -x ${A[2]} -y ${A[3]} $img -${A[0]} -${A[1]} | pvalue $pval | rcollate -ic 1 -ir $datac -or ${A[3]} -oc ${A[2]} -hi $ncomp | rcollate -ho -t | total -m | rcollate -oc 1 -or ${A[3]} -hi "$ncomp" -ho | rcalc -e ''$rcal'' | rlam - "$basename"_ang.txt > "$basename"_tmp.txt
+    pcompos -x ${A[2]} -y ${A[3]} $amg -${A[0]} -${A[1]} | pvalue -o -b -h -H -d | total -${A[2]} -m  > "$basename"_ang.txt
+    pcompos -x ${A[2]} -y ${A[3]} $img -${A[0]} -${A[1]} | pvalue $pval | total -${A[2]} -m  | rcalc -e ''$rcal'' | rlam - "$basename"_ang.txt > "$basename"_tmp.txt
 elif [ "$type" == "h" ]; then
     if [ "$data" == "i" ]; then
         pcompos -x ${A[2]} -y ${A[3]} $img -${A[0]} -${A[1]}
         exit 0
     fi
     datac=$((${A[2]}*${A[3]}))
-    pcompos -x ${A[2]} -y ${A[3]} $amg -${A[0]} -${A[1]} | pvalue -o -b -h -H -d | rcollate -ic 1 -ir $datac -or ${A[3]} -oc ${A[2]} -hi -ho -fa1 | total -m | rcollate -oc 1 -or ${A[2]} -hi -fa1 -ho > "$basename"_ang.txt
-    pcompos -x ${A[2]} -y ${A[3]} $img -${A[0]} -${A[1]} | pvalue $pval  | rcollate -ic 1 -ir $datac -or ${A[3]} -oc ${A[2]} -hi -ho $ncomp | total -m | rcollate -oc 1 -or ${A[2]} -hi $ncomp -ho | rcalc -e ''$rcal'' | rlam - "$basename"_ang.txt > "$basename"_tmp.txt
+    pcompos -x ${A[2]} -y ${A[3]} $amg -${A[0]} -${A[1]} > "$basename"_ang2.hdr
+    pcompos -x ${A[2]} -y ${A[3]} $img -${A[0]} -${A[1]} > "$basename"_tmp.hdr
+    protate "$basename"_ang2.hdr | pvalue -o -b -h -H -d | total -${A[3]} -m  > "$basename"_ang.txt
+    protate "$basename"_tmp.hdr | pvalue $pval | total -${A[3]} -m  | rcalc -e ''$rcal'' | rlam - "$basename"_ang.txt > "$basename"_tmp.txt
+    rm "$basename"_ang2.hdr "$basename"_tmp.hdr
 elif [ "$type" == "r" ]; then
     if [ "$data" == "i" ]; then
         pcompos -x ${A[2]} -y ${A[3]} $img -${A[0]} -${A[1]}

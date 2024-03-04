@@ -102,6 +102,25 @@ inline float efcc_corr(float val, float c, float o_low, float o_high){
     return (val > o_low && val < 1 - o_high) ? val * c : val;
 }
 
+// todo: annoying to parse args (need radius and center point as well)
+//inline float vg_corr(float val, const float c[4], float r, float o_low, float o_high){
+//    float out = val;
+//    if (val > o_low && val < 1 - o_high)
+//        out = val * (std::pow(r,4) * c[0] + std::pow(r,3) * c[1] + std::pow(r,2) * c[2] + r * c[2] + 1);
+//    if (out < 0 || out > 1)
+//        out = val;
+//    return out;
+//}
+
+inline float nlcc_corr(float val, const float c[3], float o_low, float o_high){
+    float out = val;
+    if (val > o_low && val < 1 - o_high)
+        out = val - (std::pow(val,3) * c[0] + std::pow(val,2) * c[1] + val * c[2]);
+    if (out < 0 || out > 1)
+        out = val;
+    return out;
+}
+
 struct FrameInfo {float etime; float iso; float aperture; float factor;};
 
 FrameInfo correct_exposure(FrameInfo info) {
@@ -133,6 +152,9 @@ void printHelp() {
                     "\t[--rgbs, -k '<val> <val> <val>']: rgb channel calibration default=1.0 1.0 1.0\n"
                     "\t\toverriden by RGBcalibration in header line. applies to output colorspace (after Camera2RGB in header line)\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
+                    "\t[--nlcorr, -L '<val> <val> <val> <val> <val> <val> <val> <val> <val>']: non-linear raw value correction\n"
+                    "\t\t give as nine values representing third order polynomial coefficients for R, G, B (with 0 intercept)\n"
+                    "\t\t e.g. if the first three values are a,b,c, red will be corrected by R-(aR^3+bR^2+cR)"
                     "\t[--efc, -C '<val> <val> <val> <val>']: electronic front curtain shutter correction, give as m a b c\n"
                     "\t\t to correct on image height according to the function: y = 1/((x/c+a*t)/(1+a*t))^b where t is\n"
                     "\t\t the (mechanical shutter) corrected exposure time. 'm' is the maximum exposure time to which these coefficients apply.\n"
@@ -145,6 +167,7 @@ void printHelp() {
                     "\t[--pfs, -P]: output pfs stream\n"
                     "\t[--exact, -e]: input camera values interpreted as exact (default=True)\n"
                     "\t[--nominal, -n]: input camera values interpreted as nominal (default=False)\n"
+                    "\t[--ignore, -G]: ignore all camera data, only use with single frame or all with same exposure\n"
                     "\t[--verbose, -v]\n\t[--help]\n\n"
                     "images are read from file formatted as:\n"
                     "\t<image1.tiff> <iso> <aperture> <exposure_time>\n"
@@ -173,8 +196,13 @@ void linearhdr_main(int argc, char *argv[]) {
     bool nominal = false;
     bool isbayer = false;
     bool demosaic = false;
+    bool ignore = false;
     float oor_high = -1;
     float oor_low = -1;
+    bool donl = false;
+    float nl_corr[3][3] = {{0.0, 0.0, 0.0},
+                            {0.0, 0.0, 0.0},
+                            {0.0, 0.0, 0.0}};
     float rgb_corr[3][3] = {{1.0, 0.0, 0.0},
                             {0.0, 1.0, 0.0},
                             {0.0, 0.0, 1.0}};
@@ -200,6 +228,7 @@ void linearhdr_main(int argc, char *argv[]) {
             {"tsv", no_argument, nullptr, 't'},
             { "saturation-offset", required_argument, nullptr, 'o' },
             { "range", required_argument, nullptr, 'r' },
+            { "nlcorr", required_argument, nullptr, 'L' },
             { "scale", required_argument, nullptr, 's' },
             { "rgbs", required_argument, nullptr, 'k' },
             { "efc", required_argument, nullptr, 'C' },
@@ -207,12 +236,13 @@ void linearhdr_main(int argc, char *argv[]) {
             { "oor-high", required_argument, nullptr, 'x' },
             { "oob-low", required_argument, nullptr, 'm' },
             { "oob-high", required_argument, nullptr, 'x' },
+            { "ignore", required_argument, nullptr, 'G' },
             {nullptr, 0,                         nullptr, 0}
     };
 
     std::stringstream k; //to read in multivalue arguments
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevuBDRd:s:r:o:m:x:k:C:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevuGBDRd:s:r:o:m:x:k:C:L:", cmdLineOptions, &optionIndex)) != -1) {
         switch (c) {
             /* help */
             case 'h':
@@ -238,18 +268,21 @@ void linearhdr_main(int argc, char *argv[]) {
             case 'x':
                 oor_high = atof(optarg);
                 break;
+            case 'G':
+                ignore = true;
+                break;
             case 'm':
                 oor_low = atof(optarg);
                 break;
             case 'o':
                 opt_saturation_offset_perc = atof(optarg);
-                if( opt_saturation_offset_perc < 0 || opt_saturation_offset_perc > 0.25 )
-                    throw pfs::Exception("saturation offset should be between 0 and 0.25");
+//                if( opt_saturation_offset_perc < 0 || opt_saturation_offset_perc > 0.25 )
+//                    throw pfs::Exception("saturation offset should be between 0 and 0.25");
                 break;
             case 'r':
                 opt_black_offset_perc = atof(optarg);
-                if( opt_black_offset_perc < 0 || opt_black_offset_perc > 0.25 )
-                    throw pfs::Exception("saturation offset should be between 0 and 0.25");
+//                if( opt_black_offset_perc < 0 || opt_black_offset_perc > 0.25 )
+//                    throw pfs::Exception("saturation offset should be between 0 and 0.25");
                 break;
             case 's':
                 opt_scale = atof(optarg);
@@ -268,6 +301,15 @@ void linearhdr_main(int argc, char *argv[]) {
                 k << optarg;
                 k >> efcr[efci] >> efc[efci][0] >> efc[efci][1] >> efc[efci][2];
                 efci++;
+                break;
+            case 'L':
+                k.str("");
+                k.clear();
+                k << optarg;
+                k >> nl_corr[0][0] >> nl_corr[0][1]  >> nl_corr[0][2];
+                k >> nl_corr[1][0] >> nl_corr[1][1]  >> nl_corr[1][2];
+                k >> nl_corr[2][0] >> nl_corr[2][1]  >> nl_corr[2][2];
+                donl = true;
                 break;
             case 't':
                 tsv = true;
@@ -353,6 +395,11 @@ void linearhdr_main(int argc, char *argv[]) {
             }
             if (nominal)
                 info = correct_exposure(info);
+            if (ignore) {
+                info.etime = 1;
+                info.iso = 100;
+                info.aperture = 1;
+            }
             info.factor = opt_scale * 100.0f * info.aperture * info.aperture / ( info.iso * info.etime );
 
             FILE *fh = fopen( framefile.c_str(), "rb");
@@ -403,25 +450,37 @@ void linearhdr_main(int argc, char *argv[]) {
         int s;
         float efcc;
         float pheight;
+        VERBOSE_STR << donl << std::endl;
         for (int i = 0; i < height; i++)
             for (int j = 0; j < width; j++) {
                 s = j + i * width;
-                // apply electronic front curtain shutter correction
-                if (efc[efci][0] != 0){
-                    // old (v0.1.8) efcc
-//                     efcc = 1/pow(((height-i) / efc[efci][2] + efc[efci][0] * info.etime)/(1 + efc[efci][0] * info.etime), efc[efci][1]);
-                    // new efcc
-                    pheight = height - i;
-                    efcc = 1 / (1 + (efc[efci][0]*pheight*pheight + efc[efci][1]*pheight + efc[efci][2]) / info.etime);
-                    (*eR.yi)(s) = efcc_corr((*X)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
-                    (*eG.yi)(s) = efcc_corr((*Y)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
-                    (*eB.yi)(s) = efcc_corr((*Z)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
+                // apply non-linear sensor response correction
+                if (donl) {
+                    (*eR.yi)(s) = nlcc_corr((*X)(s), nl_corr[0], opt_black_offset_perc, opt_saturation_offset_perc);
+                    (*eG.yi)(s) = nlcc_corr((*Y)(s), nl_corr[1], opt_black_offset_perc, opt_saturation_offset_perc);
+                    (*eB.yi)(s) = nlcc_corr((*Z)(s), nl_corr[2], opt_black_offset_perc, opt_saturation_offset_perc);
                 } else {
                     (*eR.yi)(s) = (*X)(s);
                     (*eG.yi)(s) = (*Y)(s);
                     (*eB.yi)(s) = (*Z)(s);
                 }
-                pmax = max((*X)(s), (*Y)(s), (*Z)(s), pmax);
+                // apply electronic front curtain shutter correction
+                if (efc[efci][0] != 0){
+                    pheight = height - i;
+                    efcc = 1 / (1 + (efc[efci][0]*pheight*pheight + efc[efci][1]*pheight + efc[efci][2]) / info.etime);
+                    (*eR.yi)(s) = efcc_corr((*eR.yi)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
+                    (*eG.yi)(s) = efcc_corr((*eG.yi)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
+                    (*eB.yi)(s) = efcc_corr((*eB.yi)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
+                }
+                // apply vignetting correction see note at top with inline function
+//                if (dovg) {
+//                    (*eR.yi)(s) = vg_corr((*eR.yi)(s), vg_corr[0], opt_black_offset_perc, opt_saturation_offset_perc);
+//                    (*eG.yi)(s) = vg_corr((*eG.yi)(s), vg_corr[1], opt_black_offset_perc, opt_saturation_offset_perc);
+//                    (*eB.yi)(s) = vg_corr((*eB.yi)(s), vg_corr[2], opt_black_offset_perc, opt_saturation_offset_perc);
+//                }
+
+
+                pmax = max((*eR.yi)(s), (*eG.yi)(s), (*eB.yi)(s), pmax);
         }
 
         // add to exposures list
@@ -471,21 +530,27 @@ void linearhdr_main(int argc, char *argv[]) {
 
     frame->createXYZChannels(Xj, Yj, Zj);
 
-    /* counter for saturated pixels */
-    long sp;
 
     pfs::Array2D *RGB_out[3] = {Xj, Yj, Zj};
     const ExposureList *exposures[] = {&imgsR, &imgsG, &imgsB};
 
     VERBOSE_STR << "merging hdr..." << endl;
-    sp = linear_response(RGB_out, exposures, opt_saturation_offset_perc,
+    auto [saturated_pixels, under_pixels] = linear_response(RGB_out, exposures, opt_saturation_offset_perc,
                          opt_black_offset_perc, opt_scale, vlambda, rgb_corr,
                          oor_high, oor_low, isbayer, demosaic);
 
-    if (sp > 0) {
-        float perc = ceilf(100.0f * sp / size);
+    if (under_pixels > 0) {
+        header  << cprefix << "UNDEREXPOSED_PIXEL_CNT= " << under_pixels << endl;
+        float perc = ceilf(100.0f * under_pixels / size);
+        VERBOSE_STR << PROG_NAME << ": " << "under-exposed pixels found in " << perc << "% (" << under_pixels
+                    << " pixels) of the image!" << endl;
+    }
+
+    if (saturated_pixels > 0) {
+        header  << cprefix << "OVEREXPOSED_PIXEL_CNT= " << saturated_pixels << endl;
+        float perc = ceilf(100.0f * saturated_pixels / size);
         // this one might be important, so always report saturated pixels regardless of --verbose
-        std::cerr << PROG_NAME << ": " << "saturated pixels found in " << perc << "% (" << sp
+        std::cerr << PROG_NAME << ": " << "saturated pixels found in " << perc << "% (" << saturated_pixels
                   << " pixels) of the image!" << endl;
     }
 

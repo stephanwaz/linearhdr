@@ -14,6 +14,7 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # =======================================================================
 import datetime
+import itertools
 import os
 import shutil
 import sys
@@ -33,6 +34,7 @@ from raytools.utility import pool_call
 from pylinearhdr import shadowband as sb
 from pylinearhdr import pylinearhdr as pl
 from pylinearhdr import calibrate as cl
+
 
 def get_profiles():
     d = os.path.dirname(pylinearhdr.__file__)
@@ -181,6 +183,10 @@ shared_run_opts = [
                       "(primaries + wp) the cam2rgb matrix and output primaries are written into the make_list header and "
                       " added to the output hdr header by linearhdr"),
     click.option("-xyzcam", callback=clk.split_float, help="custom xyz->cam matrix, if not given uses raw-identify"),
+    click.option("-nlcorr", callback=clk.split_float,
+                 help="non-linear response correction give as nine values representing third order polynomial "
+                      "coefficients for R, G, B (with 0 intercept) e.g. if the first three values are a,b,c, "
+                      "red will be corrected by R-(aR^3+bR^2+cR)"),
     click.option("-fo", "-f-overrides", callback=clk.tup_float,
                  help="if given, sets --correct to True. pairs of nominal/exact aperture values to correct. any aperture"
                       " not given will use the standard correction. for example give 11,11.4 22,23 to override standard"
@@ -199,6 +205,8 @@ shared_run_opts = [
                  help="saturation offset, if white is not LinearityUpperMargin, this must be changed"),
     click.option("-range", "-r", default=0.01,
                  help="lower range of single raw exposure"),
+    click.option("-rawmultipliers", default=None, callback=clk.split_float,
+                 help="override default premultipliers (2, 1, 2)"),
     click.option("--verbose/--no-verbose", default=False,
                  help="passed to linearhdr"),
     click.option("--interpfirst/--interpsecond", default=True,
@@ -224,7 +232,8 @@ shared_run_opts = [
     click.option("--premult/--no-premult", default=False,
                  help="normalize xyzcam matrix and premultiply raw channels to compensate. This will correct any"
                       " colorshift near out of bounds values at the expense of offsetting the valid raw camera range. "
-                      "If the HDR sequence is safely in range, set this to false, otherwise true may yield better results"),
+                      "If the HDR sequence is safely in range, set this to false, otherwise true may yield better results."
+                      " Do not use with -nlcorr"),
     click.option("-hdropts", default="", help="additional options to linearhdr (with callhdr, overrides -r -s)"),
     click.option("-crop", callback=clk.split_int,
                  help="crop tiff (left upper W H)"),
@@ -234,7 +243,7 @@ shared_run_opts = [
 def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
                  crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
                  black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
-                 interpfirst=True, premult=False, header_line=None, half=False, **kwargs):
+                 interpfirst=True, premult=False, header_line=None, half=False, nlcorr=None, rawmultipliers=None, **kwargs):
     """make list routine, use to generate input to linearhdr"""
     if half:
         interpfirst = True
@@ -243,7 +252,13 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         header_line = []
     else:
         header_line = list(header_line)
-    multipliers = np.array([1, 1, 1])
+    multipliers = np.array([2, 1, 2])
+    nlcorropt = ""
+    if nlcorr is not None:
+        if len(nlcorr) != 9:
+            raise ValueError(f"nlcorr should have nine components, {len(nlcorr)} given.")
+        nlstr = " ".join([f"{i:.05f}" for i in nlcorr])
+        nlcorropt = f" --nlcorr '{nlstr}' "
     if verbose:
         hdropts += " --verbose"
     if rawgrid:
@@ -267,6 +282,8 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
     if premult:
         rowsum = np.sum(xyzcam, axis=1)
         multipliers = np.max(rowsum)/rowsum
+    if rawmultipliers is not None:
+        multipliers = np.array(rawmultipliers)[0:3]
     rawcopts = '-r ' + " ".join([f"{i:.06f}" for i in multipliers]) + f" {multipliers[1]:.06f}"
     xyzcam = xyzcam * multipliers[:, None]
     rawconvertcom = pl.rawconvert_opts(imgs[0], crop=crop, bad_pixels=badpixels, rawgrid=rawgrid or (not interpfirst),
@@ -291,8 +308,7 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
     for h in header_line:
         print(f"# {h}", file=outf)
     pl.report(tiffs, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
-
-    command = [f"linearhdr -r {range} -o {saturation} {hdropts} {outfn}"]
+    command = [f"linearhdr -r {range} -o {saturation}{nlcorropt} {hdropts} {outfn}"]
     if fisheye:
         command += ["raytools solid2ang -"]
     if vfile is not None:
@@ -482,6 +498,8 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
                                           " to auto-generate from common parts (seperated by _) or"
                                           "lcommon to shorten common parts by across group differences")
 @click.option("-starti", default=0, help="start index")
+@click.option("-count", type=int, help="if given, overrides auto detection and groups into folders of count size"
+                                       " based on order given (uses sorted wildcard expansion.")
 @click.option("--ascend/--descend", default=True,
               help="shot order exposure time. ascending=shortest->longest")
 @click.option("--r/--no-r", "--rename/--no-rename", default=False,
@@ -489,34 +507,42 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
 @click.option("--preview/--no-preview", default=False,
               help="print outcome without moving")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, **kwargs):
+def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, count=None, **kwargs):
     """sort sequence of images into folders based on changes in exposure time"""
     if r:
         rename.callback(imgs, **kwargs)
         imgs = ctx.obj['imgs']
-    infos = pool_call(pl.get_raw_frame, imgs, listonly=True, correct=True, expandarg=False, pbar=False)
-    i = starti
-    if ascend:
-        expt = 1e9
+    if count is None:
+        infos = pool_call(pl.get_raw_frame, imgs, listonly=True, correct=True, expandarg=False, pbar=False)
+        i = starti
+        if ascend:
+            expt = 1e9
+        else:
+            expt = 0
+        groups = [[]]
+        for info in infos:
+            if info[1] == expt:
+                print("Duplicate!")
+                continue
+            if (info[1] < expt) != ascend:
+                groups.append([])
+                i += 1
+            expt = info[1]
+            groups[-1].append(info[0])
     else:
-        expt = 0
-    groups = [[]]
-    for info in infos:
-        if info[1] == expt:
-            print("Duplicate!")
-            continue
-        if (info[1] < expt) != ascend:
-            groups.append([])
-            i += 1
-        expt = info[1]
-        groups[-1].append(info[0])
+        def batched(iterable, n):
+            it = iter(iterable)
+            while batch := tuple(itertools.islice(it, n)):
+                yield batch
+
+        groups = list(batched(imgs, count))
     outns = []
     for j, group in enumerate(groups):
         if out[-6:] == 'common':
             pieces = [g.rsplit(".", 1)[0].split("_") for g in group]
             pcount = min(len(g) for g in pieces)
             pieces = [g.rsplit(".", 1)[0].split("_", pcount) for g in group]
-            match = [pieces[0][i] for i in range(pcount) if len(set([p[i] for p in pieces]))==1]
+            match = [pieces[0][i] for i in range(pcount) if len(set([p[i] for p in pieces])) == 1]
             outns.append("_".join(match))
         else:
             outns.append(out)
@@ -614,10 +640,11 @@ def vignette(ctx, img, vfile=None, **kwargs):
                    "not the same as pcompos!). Use pfsview, photoshop or other raw image viewer to determine. region"
                    "should be consistently lit, color neutral and in range for all images in -seq. will duplicate last"
                    "-crop when there are fewer than -seq. if not given at all, uses full image (not recommended)")
+@click.option("-runopts", default="", help="passed to pylinearhdr run")
 @click.option("-dataout",
               help="if given, save full data to this file")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def shutter(ctx, seq=None, crop=None, dataout=None, **kwargs):
+def shutter(ctx, seq=None, crop=None, runopts="", dataout=None, **kwargs):
     """do relative shutter speed calibration
 
     When multiple sequences are given, they are sorted by the
@@ -648,7 +675,7 @@ def shutter(ctx, seq=None, crop=None, dataout=None, **kwargs):
             croparg = ""
         else:
             croparg = f"-crop '{crop[j]}'"
-        result = pool_call(cl.average_green, sq, croparg, expandarg=False)
+        result = pool_call(cl.average_green, sq, croparg, runopts=runopts, expandarg=False)
         # filter out of range
         result = np.array([[j[0], j[2]] for j in result if j[3] > 0.99])
         print(f"sequence {i}: {len(result)} out of {len(sq)} frames in range", file=sys.stderr)
@@ -794,8 +821,11 @@ def aperture(ctx, seq=None, crop=None, shutterc=None, **kwargs):
 @click.option("--alternate/--no-alternate", default=False,
               help='if true and neither -rc or -tc are provided, opens both images simultaneously and expects '
                    'alternating inputs (cell 1 ref, cell 1 test, cell 2 ref, cell 2 test, etc.')
+@click.option("-minimizer", type=click.Choice(['luv', 'lab'], case_sensitive=False), default='luv')
+@click.option("--verbose/--no-verbose", default=False, help="print detailed results")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=False, refdataout=None, testdataout=None, **kwargs):
+def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=False, refdataout=None, testdataout=None,
+              verbose=False, minimizer='luv', **kwargs):
     """run color luminance calibration using reference data (or image) and test hdr
     (shutter and aperture corrected, but raw color)
 
@@ -819,18 +849,30 @@ def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=Fa
         return ishdr
 
     refimg = _is_hdr(reference)
-    if not refimg and alternate:
-        print("Warning reference is not an HDR, so setting alternate to False", file=sys.stderr)
+    testimg = _is_hdr(test)
+    if not (refimg and testimg) and alternate:
+        print("Warning reference or test is not an HDR, so setting alternate to False", file=sys.stderr)
         alternate = False
 
-    result, A, B = cl.calibrate(reference, test, rc, tc, alternate, refimg, refcol)
+    result, A, B = cl.calibrate(reference, test, rc, tc, alternate, refimg, refcol, testimg=testimg, minimizer=minimizer)
     if refdataout:
         np.savetxt(refdataout, A.T)
     if testdataout:
         np.savetxt(testdataout, B.T)
+    if verbose:
+        k, v = list(result.items())[-1]
+        print("final optimization results:")
+        if minimizer == 'luv':
+            print(" #        Dlum         Duv")
+            for c, (i, j) in enumerate(v['duv_full'].T):
+                print(f"{c:02d}  {i: >10.02%}  {j: >10.04f}")
+        else:
+            print(" #        De")
+            for c, i in enumerate(v['dlab_full'].T):
+                print(f"{c:02d}  {i: >10.02}")
     print("xyzcam matrix:")
     for k, v in result.items():
-        print(f"{k}:\t" + " ".join([str(i) for i in v['xyzcam'].ravel()]))
+        print(f"{v['label']+':':<33} " + " ".join([f"{i:.06f}" for i in v['xyzcam'].ravel()]))
 
 
 @main.command()
@@ -841,22 +883,35 @@ def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=Fa
                    'generate.')
 @click.option("-outf",
               help='data file to write. if not given, defaults to input + ".txt"')
+@click.option("-checkimg",
+              help='if given generate a masked image showing areas (values in overlapping areas get doubled)')
+@click.option("-scale", default=179.0,
+              help='scale data by this value (radiance compatible 179)')
 @click.option("--stdout/--no-stdout", default=False,
               help='overrides outf, print to stdout')
 @click.option("--zero/--no-zero", default=False,
               help='if area includes zeros, return zero for whole area')
+@click.option("--mean/--no-mean", default=True,
+              help='calculate mean (if true always first 3/4 columns')
+@click.option("--stdev/--no-stdev", default=False,
+              help='calculate stddev (if true always last 3/4 columns')
+@click.option("--lum/--no-lum", default=False,
+              help='include luminance column before RGB. if LuminanceRGB is not in header, assumes radiance colorspace')
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def getimgdata(ctx, test, tc=None, outf=None, stdout=False, zero=False, **kwargs):
+def getimgdata(ctx, test, tc=None, outf=None, stdout=False, zero=False, lum=False, checkimg=None, mean=True, stdev=False, scale=179.0, **kwargs):
     """get average squares of data from hdr"""
     if outf is None:
         outf = test + ".txt"
     tcells = cl.load_test_cells(test, tc)
-    testd = cl.load_data(test, tcells, zero=zero)
-    if stdout:
-        for d in testd.T:
-            print("\t".join([f"{i:.03f}" for i in d]))
-    else:
-        np.savetxt(outf, testd.T)
+    testd = cl.load_data(test, tcells, zero=zero, lum=lum, checkimg=checkimg, mean=mean, stdev=stdev, scale=scale)
+    if mean or stdev:
+        if stdout:
+            for d in testd.T:
+                print("\t".join([f"{i:.03f}" for i in d]))
+        else:
+            np.savetxt(outf, testd.T)
+    elif not checkimg:
+        print("Note: no data requested!", file=sys.stderr)
 
 
 @main.command()
@@ -866,16 +921,17 @@ def getimgdata(ctx, test, tc=None, outf=None, stdout=False, zero=False, **kwargs
                                           "\t srgb: (0.640,  0.330,  0.300,  0.600,  0.150,  0.060, 0.3127, 0.329)\ncolorformat:\n"
                                           "\t xyz yxy yuv")
 @click.option("-outp", default='srgb', help="output image primaries and wp. either 8 values or predefined aliases (see -inp)")
+@click.option("-lab", default=None, callback=clk.split_float, help="override -outp and output La*b* color, give XYZ whitepoint")
 @click.option("-xyzrgb", default=None, help="alternative input as xyz->rgb matrix (overrides -inp)")
 @click.option("-oxyzrgb", default=None, help="alternative output as xyz->rgb matrix (overrides -outp)")
 @click.option("-rgbrgb", default=None, help="alternative input as rgb->rgb matrix (overrides -inp and -outp)")
-@click.option("-vfile", callback=is_vignette_file, help="vignetting file, rows should be angle(degrees) factor(s) either one column"
-                                                        "for luminance or 3 for RGB, apply in destination RGB space after lens "
-                                                        " corrections. system stored files :\n" + "\n".join(vignetting_files))
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=None, **kwargs):
+def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=None, lab=None, **kwargs):
     """apply color primary conversion
     """
+    if lab is not None:
+        lab = np.array(lab).ravel()[0:3]
+        outp = 'xyz'
     if type(img) == str:
         imgd, header = io.hdr2carray(img, header=True)
         try:
@@ -883,6 +939,10 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
         except AttributeError:
             pass
         rgb, outheader = pl.color_convert_img(imgd, header, inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb)
+        if lab is not None:
+            shape = rgb.shape
+            rgb = cl.xyz_2_lab(rgb.reshape(3, -1), lab)
+            rgb = rgb.reshape(shape)
         io.array2hdr(rgb, None, header=outheader, clean=True)
     else:
         rgb2rgb, _ = pl.prep_color_transform(inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb)
@@ -898,7 +958,9 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
             dz = (d - dx - 15 * dy) / 3
             img = np.stack((dx, dy, dz)).T
         rgb = np.einsum('ij,kj->ki', rgb2rgb, img)
-        if outp == "yxy":
+        if lab is not None:
+            rgb = cl.xyz_2_lab(rgb.T, lab).T
+        elif outp == "yxy":
             dY = rgb[:, 1]
             sxyz = np.sum(rgb, axis=1)
             dx = rgb[:, 0]/sxyz
@@ -911,6 +973,7 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
             rgb = np.stack((rgb[:, 1], u, v)).T
         for r in rgb:
             print(*r)
+
 
 @main.result_callback()
 @click.pass_context

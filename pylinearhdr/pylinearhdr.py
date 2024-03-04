@@ -141,7 +141,11 @@ def name_by_exif(img, prefix=None, aperture=True, iso=True, shutter=True):
                 v = str(int(round(float(v))))
         elif k == "ShutterSpeed":
             if "/" in v:
-                v = v.split("/")[-1]
+                shutter = v.strip().split("/")
+                shutter = float(shutter[1])/float(shutter[0])
+            else:
+                shutter = 1/float(v.strip())
+            v = f"{shutter:07.2f}".rstrip("0").rstrip(".")
             k = "S-"
         outn += "_" + k + v
     return outn + "." + suff
@@ -234,9 +238,15 @@ def mtx_pw(mtx):
 def cam_color_mtx(xyzcam, cs='rad', cscale=None):
     """calculate camRGB->RGB from camera xyz->cam (from raw-identify or custom) and rgb primaries/whitepoint """
     # xyz->camRGB from adobeDNG/libraw/dcraw
+    xyz_cam = np.asarray(xyzcam).reshape(3, 3)
+    # do no conversion
     if cs == 'raw':
         return np.eye(3), [f"# Camera2RGB= 1 0 0 0 1 0 0 0 1"]
-    if cs == 'rad':
+    # only convert to XYZ
+    if cs == 'xyz':
+        cs = ((1., 0., 0., 1., 0., 0.), (0.33333333, 0.33333333))
+    # process RGB color transform
+    elif cs == 'rad':
         cs = PREDEFINED_COLORS['rad']
     elif cs == 'srgb':
         cs = PREDEFINED_COLORS['srgb']
@@ -244,7 +254,6 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None):
         cs = (np.asarray(cs[0]).ravel(), np.asarray(cs[1]).ravel())
     rgb_xyz = pw_mtx(*cs)
 
-    xyz_cam = np.asarray(xyzcam).reshape(3, 3)
     # rgb->camRGB
     rgb_cam = xyz_cam @ rgb_xyz
     # invert to camRGB->rgb
