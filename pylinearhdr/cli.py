@@ -210,14 +210,15 @@ shared_run_opts = [
     click.option("--verbose/--no-verbose", default=False,
                  help="passed to linearhdr"),
     click.option("--interpfirst/--interpsecond", default=True,
-                 help="interpolate with rawconvert (uses DHT unless --half) or interpolate after merge (uses DHT)"),
+                 help="interpolate with rawconvert (uses -interpq unless --half) or interpolate after merge (uses DHT)"),
+    click.option("-interpq", default="DHT",
+                 type=click.Choice(["linear", "VNG", "PPG", "AHD", "DCB", "DHT", "AAHD"], case_sensitive=False),
+                 help="demosaicing algorithm"),
     click.option("--half/--no-half", default=False,
                  help="use half-scale output from rawconvert, disables --interpsecond and --rawgrid"),
     click.option("--rawgrid/--no-rawgrid", default=False,
                  help="do not interpolate raw channels. forces -colorspace to 'raw' and ignores --interpfirst"),
     click.argument("imgs", callback=clk.are_files),
-    click.option("--shell/--no-shell", default=False,
-                 help="output shell file for use with stdin of linearhdr: bash output.sh | linearhdr"),
     click.option("--fisheye/--no-fisheye", default=False,
                  help="apply fisheye_corr to 180 degree image (must be properly cropped and equiangular). "
                       "requires pcomb and RAYPATH"),
@@ -240,10 +241,10 @@ shared_run_opts = [
 ]
 
 
-def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
+def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
                  crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
                  black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
-                 interpfirst=True, premult=False, header_line=None, half=False, nlcorr=None, rawmultipliers=None, **kwargs):
+                 interpfirst=True, premult=False, header_line=None, half=False, nlcorr=None, rawmultipliers=None, interpq="DHT", **kwargs):
     """make list routine, use to generate input to linearhdr"""
     if half:
         interpfirst = True
@@ -269,7 +270,6 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
     outf = sys.stdout
     outfn = "<makelist.txt>"
     if listonly:
-        shell = False
         overwrite = False
     elif callhdr:
         outfn = clean_tmp(ctx).rsplit("/", 1)[-1]
@@ -287,7 +287,7 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
     rawcopts = '-r ' + " ".join([f"{i:.06f}" for i in multipliers]) + f" {multipliers[1]:.06f}"
     xyzcam = xyzcam * multipliers[:, None]
     rawconvertcom = pl.rawconvert_opts(imgs[0], crop=crop, bad_pixels=badpixels, rawgrid=rawgrid or (not interpfirst),
-                                       black=black, white=white, rawcopts=rawcopts, half=half)
+                                       black=black, white=white, rawcopts=rawcopts, half=half, interpq=interpq)
     tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, rawconvertcom=rawconvertcom, fo=fo,
                      shutterc=shutterc, listonly=listonly, expandarg=False, pbar=False)
     cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale)
@@ -307,7 +307,7 @@ def makelist_run(ctx, imgs, shell=False, overwrite=False, correct=False, listonl
         print(h, file=outf)
     for h in header_line:
         print(f"# {h}", file=outf)
-    pl.report(tiffs, shell, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
+    pl.report(tiffs, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
     command = [f"linearhdr -r {range} -o {saturation}{nlcorropt} {hdropts} {outfn}"]
     if fisheye:
         command += ["raytools solid2ang -"]
@@ -963,11 +963,13 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
         elif outp == "yxy":
             dY = rgb[:, 1]
             sxyz = np.sum(rgb, axis=1)
+            sxyz[sxyz==0] = 1
             dx = rgb[:, 0]/sxyz
             dy = rgb[:, 1]/sxyz
             rgb = np.stack((dY, dx, dy)).T
         elif outp == 'yuv':
             d = rgb[:, 0] + 15 * rgb[:, 1] + 3 * rgb[:, 2]
+            d[d == 0] = 1
             u = 4 * rgb[:, 0] / d
             v = 9 * rgb[:, 1] / d
             rgb = np.stack((rgb[:, 1], u, v)).T

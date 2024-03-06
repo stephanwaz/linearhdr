@@ -29,6 +29,8 @@ from scipy.interpolate import UnivariateSpline
 PREDEFINED_COLORS = dict(rad=((0.640, 0.330, 0.290, 0.600, 0.150, 0.060), (0.3333, 0.3333)),
                          srgb=((0.64,  0.33,  0.3,  0.6,  0.15,  0.06), (0.3127, 0.329)))
 
+demosaic_dict = dict(linear=0, VNG=1, PPG=2, AHD=3, DCB=4, DHT=11, AAHD=12)
+
 
 def camera_raw_values(img):
     tiff = img + "_raw.tiff"
@@ -174,7 +176,7 @@ def process_dcraw_opt(val, img, callexif=True, avg=False):
 
 
 def rawconvert_opts(img, crop=None, bad_pixels=None, rawgrid=False, black="PerChannelBlackLevel",
-                    white="LinearityUpperMargin", rawcopts='', half=False):
+                    white="LinearityUpperMargin", rawcopts='', half=False, interpq="DHT"):
     black = process_dcraw_opt(black, img, avg=True)
     white = process_dcraw_opt(white, img, avg=True)
     cs = ""
@@ -187,7 +189,8 @@ def rawconvert_opts(img, crop=None, bad_pixels=None, rawgrid=False, black="PerCh
     elif rawgrid:
         cs += " -disinterp"
     else:
-        cs += " -q 11"
+        iq = demosaic_dict[interpq]
+        cs += f" -q {iq}"
     return f"rawconvert {cs} -k {black} -S {white} {rawcopts}"
 
 
@@ -273,23 +276,20 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None):
     return cam_rgb, header
 
 
-def report(tiffs, s=False, l=False, scale=1, sat_w=0.99, sat_b=.01, outf=None):
+def report(tiffs, l=False, scale=1, sat_w=0.99, sat_b=.01, outf=None):
     if outf is None:
         outf = sys.stdout
     if l:
         print(f"Name Date ISO aperture etime shutter luminance range", file=sys.stderr)
     else:
         tiffs = sorted(tiffs, key=lambda x: x[1])
-        if not s:
-            capdate = sorted([tiffs[0][-1].strip(), tiffs[-1][-1].strip()])
-            stop = capdate[-1].rsplit(" ", 1)[1]
-            print(f"# SEQUENCECAPDATE= {capdate[0]}-{stop}", file=outf)
+        capdate = sorted([tiffs[0][-1].strip(), tiffs[-1][-1].strip()])
+        stop = capdate[-1].rsplit(" ", 1)[1]
+        print(f"# SEQUENCECAPDATE= {capdate[0]}-{stop}", file=outf)
     for tiff, sh, ap, iso, time in tiffs:
         if l:
             fmax = scale * 100 * ap * ap * sh / iso
             print(f"{tiff} {time} {iso} {ap:.03f} {1/sh:.08f} {sh:.02f} = {sat_b*fmax:.02f} to {sat_w*fmax:.02f}", file=sys.stderr)
-        elif s:
-            print(f"pfsin {tiff} | pfstag --set 'ISO={iso/scale}' --set 'aperture={ap:.03f}' --set 'exposure_time={1/sh:.08f}'", file=outf)
         else:
             print(f"{tiff} {iso/scale} {ap:.03f} {1/sh:.08f}", file=outf)
 

@@ -390,9 +390,9 @@ RawProcessor.set_progress_handler(my_progress_callback,
       snprintf(outfn, sizeof(outfn), "-");
     else
     {
-      if (*outext == '.') // append
+      if (*outext == '.' && outext[1] != '.' && outext[1] != '/' ) // append
         snprintf(outfn, sizeof(outfn), "%s%s", argv[arg], outext);
-      else if (strchr(outext, '.') && *outext != '.') // dot is not 1st char
+      else if (strchr(outext, '.')) // dot is not 1st char
         strncpy(outfn, outext, sizeof(outfn));
       else
       {

@@ -242,7 +242,7 @@ void linearhdr_main(int argc, char *argv[]) {
 
     std::stringstream k; //to read in multivalue arguments
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevuGBDRd:s:r:o:m:x:k:C:L:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevutGBDRd:s:r:o:m:x:k:C:L:", cmdLineOptions, &optionIndex)) != -1) {
         switch (c) {
             /* help */
             case 'h':
@@ -568,7 +568,7 @@ void linearhdr_main(int argc, char *argv[]) {
             }
 
     } else if (rgbe){
-        RGBEWriter writer( stdout, true );
+        RGBEWriter writer( stdout, not ignore );
         std::string hstring = header.str().substr(0,-1);
         writer.writeImage( Xj, Yj, Zj, hstring );
     } else {
