@@ -206,7 +206,7 @@ shared_run_opts = [
     click.option("-range", "-r", default=0.01,
                  help="lower range of single raw exposure"),
     click.option("-rawmultipliers", default=None, callback=clk.split_float,
-                 help="override default premultipliers (2, 1, 2)"),
+                 help="override default premultipliers (1, 1, 1)"),
     click.option("--verbose/--no-verbose", default=False,
                  help="passed to linearhdr"),
     click.option("--interpfirst/--interpsecond", default=True,
@@ -253,7 +253,7 @@ def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scal
         header_line = []
     else:
         header_line = list(header_line)
-    multipliers = np.array([2, 1, 2])
+    multipliers = np.array([1, 1, 1])
     nlcorropt = ""
     if nlcorr is not None:
         if len(nlcorr) != 9:
@@ -514,7 +514,6 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, co
         imgs = ctx.obj['imgs']
     if count is None:
         infos = pool_call(pl.get_raw_frame, imgs, listonly=True, correct=True, expandarg=False, pbar=False)
-        i = starti
         if ascend:
             expt = 1e9
         else:
@@ -526,7 +525,6 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, co
                 continue
             if (info[1] < expt) != ascend:
                 groups.append([])
-                i += 1
             expt = info[1]
             groups[-1].append(info[0])
     else:
@@ -554,14 +552,14 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, co
         outns = ["_".join([g[j] for j, m in enumerate(match) if m]) for g in pieces]
     for j, (group, outn) in enumerate(zip(groups, outns)):
         if preview:
-            print(f"\n{outn}_{j:03d}/")
+            print(f"\n{outn}_{j+starti:03d}/")
         else:
-            try_mkdir(f"{outn}_{j:03d}")
+            try_mkdir(f"{outn}_{j+starti:03d}")
         for g in group:
             if preview:
                 print(f"\t{g}")
             else:
-                shutil.move(g, f"{outn}_{j:03d}")
+                shutil.move(g, f"{outn}_{j+starti:03d}")
     # print([len(i) for i in groups])
 
 
@@ -641,10 +639,11 @@ def vignette(ctx, img, vfile=None, **kwargs):
                    "should be consistently lit, color neutral and in range for all images in -seq. will duplicate last"
                    "-crop when there are fewer than -seq. if not given at all, uses full image (not recommended)")
 @click.option("-runopts", default="", help="passed to pylinearhdr run")
+@click.option("-channel", default="g", help="which color channel to use")
 @click.option("-dataout",
               help="if given, save full data to this file")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def shutter(ctx, seq=None, crop=None, runopts="", dataout=None, **kwargs):
+def shutter(ctx, seq=None, crop=None, runopts="", dataout=None, channel='g', **kwargs):
     """do relative shutter speed calibration
 
     When multiple sequences are given, they are sorted by the
@@ -675,7 +674,7 @@ def shutter(ctx, seq=None, crop=None, runopts="", dataout=None, **kwargs):
             croparg = ""
         else:
             croparg = f"-crop '{crop[j]}'"
-        result = pool_call(cl.average_green, sq, croparg, runopts=runopts, expandarg=False)
+        result = pool_call(cl.average_channel, sq, croparg, runopts=runopts, expandarg=False, channel=channel)
         # filter out of range
         result = np.array([[j[0], j[2]] for j in result if j[3] > 0.99])
         print(f"sequence {i}: {len(result)} out of {len(sq)} frames in range", file=sys.stderr)
@@ -780,7 +779,7 @@ def aperture(ctx, seq=None, crop=None, shutterc=None, **kwargs):
         croparg = f"-crop '{crop}'"
     # for each sequence calculate average value
     for sq in seq:
-        result = cl.average_green(" ".join(sq), croparg)
+        result = cl.average_channel(" ".join(sq), croparg)
         if result[3] < 1:
             print(f"Warning! sequence '{sq}' does not yield an in range HDR image, {1-result[3]} is out of range",
                   file=sys.stderr)
@@ -889,8 +888,10 @@ def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=Fa
               help='scale data by this value (radiance compatible 179)')
 @click.option("--stdout/--no-stdout", default=False,
               help='overrides outf, print to stdout')
-@click.option("--zero/--no-zero", default=False,
-              help='if area includes zeros, return zero for whole area')
+@click.option("-zeromode", default=0, type=click.IntRange(0, 2),
+              help='mode 0: treat zeros as normal part of data, include in average, '
+                   'mode 1: take average on non-zero data, '
+                   'mode 2: if area includes zeros, return zero for whole area, ')
 @click.option("--mean/--no-mean", default=True,
               help='calculate mean (if true always first 3/4 columns')
 @click.option("--stdev/--no-stdev", default=False,
@@ -898,16 +899,16 @@ def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=Fa
 @click.option("--lum/--no-lum", default=False,
               help='include luminance column before RGB. if LuminanceRGB is not in header, assumes radiance colorspace')
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def getimgdata(ctx, test, tc=None, outf=None, stdout=False, zero=False, lum=False, checkimg=None, mean=True, stdev=False, scale=179.0, **kwargs):
+def getimgdata(ctx, test, tc=None, outf=None, stdout=False, zeromode=0, lum=False, checkimg=None, mean=True, stdev=False, scale=179.0, **kwargs):
     """get average squares of data from hdr"""
     if outf is None:
         outf = test + ".txt"
     tcells = cl.load_test_cells(test, tc)
-    testd = cl.load_data(test, tcells, zero=zero, lum=lum, checkimg=checkimg, mean=mean, stdev=stdev, scale=scale)
+    testd = cl.load_data(test, tcells, zero=zeromode, lum=lum, checkimg=checkimg, mean=mean, stdev=stdev, scale=scale)
     if mean or stdev:
         if stdout:
             for d in testd.T:
-                print("\t".join([f"{i:.03f}" for i in d]))
+                print("\t".join([f"{i:.08g}" for i in d]))
         else:
             np.savetxt(outf, testd.T)
     elif not checkimg:
@@ -925,8 +926,9 @@ def getimgdata(ctx, test, tc=None, outf=None, stdout=False, zero=False, lum=Fals
 @click.option("-xyzrgb", default=None, help="alternative input as xyz->rgb matrix (overrides -inp)")
 @click.option("-oxyzrgb", default=None, help="alternative output as xyz->rgb matrix (overrides -outp)")
 @click.option("-rgbrgb", default=None, help="alternative input as rgb->rgb matrix (overrides -inp and -outp)")
+@click.option("--verbose/--no-verbose", default=False, help="print color transforn matrices to stderr")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=None, lab=None, **kwargs):
+def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=None, lab=None, verbose=True, **kwargs):
     """apply color primary conversion
     """
     if lab is not None:
@@ -938,14 +940,14 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
             header += [imagetools.hdr2vm(img).header()]
         except AttributeError:
             pass
-        rgb, outheader = pl.color_convert_img(imgd, header, inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb)
+        rgb, outheader = pl.color_convert_img(imgd, header, inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb, verbose=verbose)
         if lab is not None:
             shape = rgb.shape
             rgb = cl.xyz_2_lab(rgb.reshape(3, -1), lab)
             rgb = rgb.reshape(shape)
         io.array2hdr(rgb, None, header=outheader, clean=True)
     else:
-        rgb2rgb, _ = pl.prep_color_transform(inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb)
+        rgb2rgb, _ = pl.prep_color_transform(inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb, verbose=verbose)
         if inp == "yxy":
             dy = img[:, 0]
             dx = img[:, 0]*img[:, 1]/img[:, 2]

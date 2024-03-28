@@ -147,7 +147,9 @@ def name_by_exif(img, prefix=None, aperture=True, iso=True, shutter=True):
                 shutter = float(shutter[1])/float(shutter[0])
             else:
                 shutter = 1/float(v.strip())
-            v = f"{shutter:07.2f}".rstrip("0").rstrip(".")
+            v = f"{shutter:07.2f}"
+            if shutter >= 4:
+                v = v.rstrip("0").rstrip(".")
             k = "S-"
         outn += "_" + k + v
     return outn + "." + suff
@@ -324,8 +326,9 @@ def str_primaries_2_mtx(inp, mtx=None):
     return rgb2xyz, ps, ws
 
 
-def prep_color_transform(inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb=None):
+def prep_color_transform(inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb=None, verbose=False):
     newheader = []
+    orgb2xyz = np.eye(3)
     if inp in ["xyz", "yxy", 'yuv']:
         inp2xyz = np.eye(3)
     else:
@@ -349,11 +352,25 @@ def prep_color_transform(inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb=None):
                       f"LuminanceRGB= {ls}"]
         rgb2rgbs = " ".join([f"{i:.08f}" for i in rgb2rgb.ravel()])
         newheader.append(f"RGB2RGB= {rgb2rgbs}")
+    if verbose:
+        xyz2inp = np.linalg.inv(inp2xyz)
+        print("XYZ->input:\n   {:.04f}   {:.04f}   {:.04f}".format(*xyz2inp[0]), file=sys.stderr)
+        print("   {:.04f}   {:.04f}   {:.04f}".format(*xyz2inp[1]), file=sys.stderr)
+        print("   {:.04f}   {:.04f}   {:.04f}\n".format(*xyz2inp[2]), file=sys.stderr)
+        print("input->XYZ:\n   {:.04f}   {:.04f}   {:.04f}".format(*inp2xyz[0]), file=sys.stderr)
+        print("   {:.04f}   {:.04f}   {:.04f}".format(*inp2xyz[1]), file=sys.stderr)
+        print("   {:.04f}   {:.04f}   {:.04f}\n".format(*inp2xyz[2]), file=sys.stderr)
+        print("output->XYZ:\n   {:.04f}   {:.04f}   {:.04f}".format(*orgb2xyz[0]), file=sys.stderr)
+        print("   {:.04f}   {:.04f}   {:.04f}".format(*orgb2xyz[1]), file=sys.stderr)
+        print("   {:.04f}   {:.04f}   {:.04f}\n".format(*orgb2xyz[2]), file=sys.stderr)
+        print("input->output:\n   {:.04f}   {:.04f}   {:.04f}".format(*rgb2rgb[0]), file=sys.stderr)
+        print("   {:.04f}   {:.04f}   {:.04f}".format(*rgb2rgb[1]), file=sys.stderr)
+        print("   {:.04f}   {:.04f}   {:.04f}\n".format(*rgb2rgb[2]), file=sys.stderr)
     return rgb2rgb, newheader
 
 
-def color_convert_img(imgd, header, inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb=None):
-    rgb2rgb, newheader = prep_color_transform(inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb)
+def color_convert_img(imgd, header, inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb=None, verbose=False):
+    rgb2rgb, newheader = prep_color_transform(inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb, verbose=verbose)
     if inp == "yxy":
         dy = imgd[0]
         dx = imgd[0]*imgd[1]/imgd[2]

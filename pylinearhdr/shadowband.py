@@ -148,14 +148,15 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
 
     if check is not None:
         mask3 = np.copy(np.broadcast_to(mask, (3, *mask.shape)))
-        mask3[0, src_mask] = 0
-        mask3[1, src_mask] = 1 - mask3[1, src_mask]
-        mask3[2, src_mask] = mask3[2, src_mask]
-        mask3[1:, outer_src_mask >= .5] = 0
-        mask3[0, outer_src_mask >= .5] = 1
+        # mask3[0, src_mask] = 0
+        # mask3[1, src_mask] = 1 - mask3[1, src_mask]
+        # mask3[2, src_mask] = mask3[2, src_mask]
+        # mask3[1:, outer_src_mask >= .5] = 0
+        # mask3[0, outer_src_mask >= .5] = 1
         io.array2hdr(mask3, f"{check}_mask.hdr")
         io.carray2hdr(hdata, f"{check}_H.hdr")
         io.carray2hdr(vdata, f"{check}_V.hdr")
+        io.carray2hdr(sdata, f"{check}_ND.hdr")
 
     vms = ViewMapper(dxyz=sb_cpxyz, viewangle=45)
     lum = blend[:, inter_src_mask].reshape(3, -1).T

@@ -19,14 +19,14 @@
  */
 
 #include <iostream>
-
+#include <config.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
 #include <getopt.h>
 #include <sstream>
 #include <rgbeio.h>
-
+#include <linearhdr.h>
 #include <pfs.h>
 
 #define PROG_NAME "convertcolor"
@@ -37,54 +37,90 @@ class QuietException
 
 void printHelp()
 {
-  fprintf( stderr, PROG_NAME " convert pfs stream from XYZ to dest, options are: \n"
-                             "XYZ, RGB, SRGB, YUV, Yxy, PQYCbCr2020, YCbCr709, HLGYCbCr2020, RGB2020\n" );
+  fprintf( stderr, PROG_NAME " convert pfs stream to destination, options: \n"
+                             "\t[--colorspace, -c]: output colorspace. choices: XYZ, RGB, SRGB, YUV, Yxy, PQYCbCr2020, YCbCr709, HLGYCbCr2020, RGB2020\n"
+                             "\t[--hdr, -H]: output rgbe image format instead of pfs stream\n"
+                             "\t[--tsv, -t]: output tsv data instead of pfs stream\n"
+                             "\t[--raw, -r]: if --hdr do not apply 1/179 multiplier\n"
+                             "\t[--demosaic, -d]: assumes bayer grid input, apply DHT demosaicing and then color transform. use XYZ to pass raw color out.\n"
+                             "\t[--mtx, -m '<val> <val> <val> <val> <val> <val> <val> <val> <val>']: input to output color transform matrix, overrides --colorspace give in row major order\n"
+                             "\t[--verbose, -v]: verbose messages\n\n");
 }
+
+bool verbose = false;
 
 void ConvertColor( int argc, char* argv[] ) {
     pfs::DOMIO pfsio;
 
-
-    bool verbose = false;
     int c;
     std::string csout = "RGB";
     pfs::ColorSpace cs_out;;
     bool data = false;
     bool hdr = false;
     bool radiance = true;
+    bool usemtx = false;
+    bool demosaic = false;
+    float rgb2rgb[3][3] = {{0.0, 0.0, 0.0},
+                           {0.0, 0.0, 0.0},
+                           {0.0, 0.0, 0.0}};
+
+    int width, height, size;
 
     static struct option cmdLineOptions[] = {
     { "help", no_argument, NULL, 'h' },
-    { "verbose", no_argument, NULL, 'v' },
     { "colorspace", required_argument, NULL, 'c' },
-    { "data", no_argument, NULL, 'd' },
+    { "tsv", no_argument, NULL, 't' },
     { "hdr", no_argument, NULL, 'H' },
     { "raw", no_argument, NULL, 'r' },
+    { "mtx", required_argument, NULL, 'm' },
+    { "demosaic", no_argument, NULL, 'd' },
+    { "verbose", no_argument, NULL, 'v' },
     { NULL, 0, NULL, 0 }
     };
 
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "Hhrvdc:", cmdLineOptions, &optionIndex)) != -1) {
-
+    std::stringstream k; //to read in multivalue arguments
+    int ci = 0;
+    while ((c = getopt_long(argc, argv, "Hhrvdc:m:", cmdLineOptions, &optionIndex)) != -1) {
+        ci++;
+        if (strlen(argv[ci]) > 2 && argv[ci][1] != '-'){
+            char message[100];
+            snprintf(message, 100, "bad option : %s, all long options need --", argv[ci]);
+            throw pfs::Exception(message);
+        }
         switch( c ) {
             case 'h':
               printHelp();
               throw QuietException();
-            case 'v':
-              verbose = true;
-              break;
             case 'H':
                 data = true;
                 hdr = true;
                 break;
             case 'c':
-              csout.assign(optarg);
-              break;
-            case 'd':
+                ci++;
+                csout.assign(optarg);
+                break;
+            case 't':
                 data = true;
+                break;
+            case 'v':
+                verbose = true;
                 break;
             case 'r':
                 radiance = false;
+                break;
+            case 'd':
+                demosaic = true;
+                break;
+            case 'm':
+                ci++;
+                k.str("");
+                k.clear();
+                k << optarg;
+                k >> rgb2rgb[0][0] >> rgb2rgb[0][1]  >> rgb2rgb[0][2];
+                k >> rgb2rgb[1][0] >> rgb2rgb[1][1]  >> rgb2rgb[1][2];
+                k >> rgb2rgb[2][0] >> rgb2rgb[2][1]  >> rgb2rgb[2][2];
+                usemtx = true;
                 break;
             default:
               throw QuietException();
@@ -126,19 +162,40 @@ void ConvertColor( int argc, char* argv[] ) {
             throw QuietException();
     }
 
-//    VERBOSE_STR << cs_out << std::endl;
-
 
   
   while( true ) {
-    pfs::Frame *frame = pfsio.readFrame( stdin );
-    if( frame == NULL ) break; // No more frames
+      pfs::Frame *frame = pfsio.readFrame( stdin );
+      if( frame == NULL ) break; // No more frames
 
 
-    pfs::Channel *X, *Y, *Z;
-    frame->getXYZChannels( X, Y, Z );
+      pfs::Channel *X, *Y, *Z;
+      frame->getXYZChannels( X, Y, Z );
 
-    pfs::transformColorSpace( pfs::CS_XYZ, X, Y, Z, cs_out, X, Y, Z );
+      width = Y->getCols();
+      height = Y->getRows();
+      size = width * height;
+
+      pfs::Array2D *xyz[3] = {X, Y, Z};
+
+    if (demosaic) {
+        int g0 = first_non_zero(Y);
+        int r0 = first_non_zero_row(X);
+        VERBOSE_STR << "go: " << g0 << " r0: " << r0 << std::endl;
+        dht_interpolate(X, Y, Z);
+    }
+
+    if (usemtx) {
+        VERBOSE_STR << rgb2rgb[0][0] << " " << rgb2rgb[0][1] << " " << rgb2rgb[0][2] << std::endl;
+        VERBOSE_STR << rgb2rgb[1][0] << " " << rgb2rgb[1][1] << " " << rgb2rgb[1][2] << std::endl;
+        VERBOSE_STR << rgb2rgb[2][0] << " " << rgb2rgb[2][1] << " " << rgb2rgb[2][2] << std::endl;
+        for (int j = 0; j < size; j++)
+            apply_color_transform(j, xyz, rgb2rgb);
+
+    } else {
+        pfs::transformColorSpace( pfs::CS_XYZ, X, Y, Z, cs_out, X, Y, Z );
+    }
+
     if (data) {
         if (hdr) {
             std::stringstream header;
@@ -147,9 +204,6 @@ void ConvertColor( int argc, char* argv[] ) {
             std::string hstring = header.str();
             writer.writeImage( X, Y, Z, hstring );
         } else {
-            int width = Y->getCols();
-            int height = Y->getRows();
-            int size = width * height;
             for (int i = 0; i < size; i++)
                 std::cout << (*X)(i) << "\t" << (*Y)(i) << "\t" << (*Z)(i) << std::endl;
         }

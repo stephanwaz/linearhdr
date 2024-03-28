@@ -81,6 +81,7 @@ it under the terms of the one of two licenses as you choose:
 void usage(const char *prog)
 {
   printf("rawconvert: dcraw_emu fork that ensures consistent scaling of raw output as raw RGB\n");
+  printf("with default options (mostly) equivalent to: dcraw_emu -T -r 1 1 1 1 -q 11 -4 -o 0\n");
   printf("IMPORTANT! you must set -S and -k for reliable results! use:\n");
   printf("\texiftool -AverageBlackLevel -LinearityUpperMargin (or equivalent metadata for your camera\n\n");
   printf("Usage:  %s [OPTION]... [FILE]...\n", prog);

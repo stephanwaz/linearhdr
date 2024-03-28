@@ -93,7 +93,9 @@ std::tuple<long, long> linear_response(pfs::Array2D *rgb_out[],
                                     const float oor_high = -1,
                                     const float oor_low = -1,
                                     bool isbayer = false,
-                                    const bool demosaic = false);
+                                    const bool demosaic = false,
+                                    bool weightworst = true,
+                                    int wfi = 0);
 
 void dht_interpolate(pfs::Array2D *Xj, pfs::Array2D *Yj, pfs::Array2D *Zj);
 
@@ -102,5 +104,7 @@ int first_non_zero_row(pfs::Array2D *X);
 int first_non_zero(pfs::Array2D *X);
 
 int grid_color(int i, int j, int g0, int r0);
+
+void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3]);
 
 #endif /* #ifndef _linearhdr_h_ */

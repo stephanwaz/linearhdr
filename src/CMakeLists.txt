@@ -12,7 +12,7 @@ include_directories(${TIFF_INCLUDE_DIR})
 add_executable(linearhdr linearhdr_main.cpp linearhdr.cpp dht_demosaic.cpp fileformat/rgbeio.cpp fileformat/hdrtiffio.cpp "${GETOPT_OBJECT}")
 target_link_libraries(linearhdr pfs ${TIFF_LIBRARY})
 
-add_executable(convertcolor convertcolor.cpp fileformat/rgbeio.cpp "${GETOPT_OBJECT}")
+add_executable(convertcolor convertcolor.cpp fileformat/rgbeio.cpp linearhdr.cpp dht_demosaic.cpp "${GETOPT_OBJECT}")
 target_link_libraries(convertcolor pfs)
 
 message(STATUS ${CMAKE_INSTALL_PREFIX})

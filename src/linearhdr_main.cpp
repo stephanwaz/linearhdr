@@ -197,6 +197,9 @@ void linearhdr_main(int argc, char *argv[]) {
     bool isbayer = false;
     bool demosaic = false;
     bool ignore = false;
+    bool weightworst = true;
+    std::string wf = "p";
+    int wfi = 0;
     float oor_high = -1;
     float oor_low = -1;
     bool donl = false;
@@ -236,13 +239,22 @@ void linearhdr_main(int argc, char *argv[]) {
             { "oor-high", required_argument, nullptr, 'x' },
             { "oob-low", required_argument, nullptr, 'm' },
             { "oob-high", required_argument, nullptr, 'x' },
-            { "ignore", required_argument, nullptr, 'G' },
+            { "ignore", no_argument, nullptr, 'G' },
+            { "we", no_argument, nullptr, 'w' }, //undocumented if false weights by channels independently
+            { "wf", required_argument, nullptr, 'f' }, //undocumented weighting function
             {nullptr, 0,                         nullptr, 0}
     };
 
     std::stringstream k; //to read in multivalue arguments
     int optionIndex = 0;
-    while ((c = getopt_long(argc, argv, "hnevutGBDRd:s:r:o:m:x:k:C:L:", cmdLineOptions, &optionIndex)) != -1) {
+    int ci = 0;
+    while ((c = getopt_long(argc, argv, "hnevutGBDRwd:s:r:o:m:x:k:C:L:f:", cmdLineOptions, &optionIndex)) != -1) {
+        ci++;
+        if (strlen(argv[ci]) > 2 && argv[ci][1] != '-'){
+            char message[100];
+            snprintf(message, 100, "bad option : %s, all long options need --", argv[ci]);
+            throw pfs::Exception(message);
+        }
         switch (c) {
             /* help */
             case 'h':
@@ -266,36 +278,50 @@ void linearhdr_main(int argc, char *argv[]) {
                 demosaic = true;
                 break;
             case 'x':
+                ci++;
                 oor_high = atof(optarg);
                 break;
             case 'G':
                 ignore = true;
                 break;
             case 'm':
+                ci++;
                 oor_low = atof(optarg);
                 break;
+            case 'f':
+                ci++;
+                k.str("");
+                k.clear();
+                k << optarg[0];
+                wf = k.str();
+                break;
             case 'o':
+                ci++;
                 opt_saturation_offset_perc = atof(optarg);
 //                if( opt_saturation_offset_perc < 0 || opt_saturation_offset_perc > 0.25 )
 //                    throw pfs::Exception("saturation offset should be between 0 and 0.25");
                 break;
             case 'r':
+                ci++;
                 opt_black_offset_perc = atof(optarg);
 //                if( opt_black_offset_perc < 0 || opt_black_offset_perc > 0.25 )
 //                    throw pfs::Exception("saturation offset should be between 0 and 0.25");
                 break;
             case 's':
+                ci++;
                 opt_scale = atof(optarg);
                 if( opt_scale <= 0)
                     throw pfs::Exception("scale must be positive");
                 break;
             case 'k':
+                ci++;
                 k.str("");
                 k.clear();
                 k << optarg;
                 k >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
                 break;
             case 'C':
+                ci++;
                 k.str("");
                 k.clear();
                 k << optarg;
@@ -303,6 +329,7 @@ void linearhdr_main(int argc, char *argv[]) {
                 efci++;
                 break;
             case 'L':
+                ci++;
                 k.str("");
                 k.clear();
                 k << optarg;
@@ -320,10 +347,32 @@ void linearhdr_main(int argc, char *argv[]) {
             case 'P':
                 rgbe = false;
                 break;
+            case 'w':
+                weightworst = false;
+                break;
             default:
                 throw QuietException();
         }
     }
+
+
+    switch(wf.at(0)) {
+        case 'p':
+            wfi = 0;
+            break;
+        case 'h':
+            wfi = 1;
+            break;
+        case 't':
+            wfi = 2;
+            break;
+        default:
+            char message[100];
+            snprintf(message, 100, "--wf must be one of h (hat),t (top),p (poisson noise) parsed: %s", wf.c_str());
+            throw pfs::Exception(message);
+    }
+
+
 
     if (argv[optind] == nullptr){
         printHelp();
@@ -450,7 +499,6 @@ void linearhdr_main(int argc, char *argv[]) {
         int s;
         float efcc;
         float pheight;
-        VERBOSE_STR << donl << std::endl;
         for (int i = 0; i < height; i++)
             for (int j = 0; j < width; j++) {
                 s = j + i * width;
@@ -537,7 +585,7 @@ void linearhdr_main(int argc, char *argv[]) {
     VERBOSE_STR << "merging hdr..." << endl;
     auto [saturated_pixels, under_pixels] = linear_response(RGB_out, exposures, opt_saturation_offset_perc,
                          opt_black_offset_perc, opt_scale, vlambda, rgb_corr,
-                         oor_high, oor_low, isbayer, demosaic);
+                         oor_high, oor_low, isbayer, demosaic, weightworst, wfi);
 
     if (under_pixels > 0) {
         header  << cprefix << "UNDEREXPOSED_PIXEL_CNT= " << under_pixels << endl;
@@ -572,7 +620,8 @@ void linearhdr_main(int argc, char *argv[]) {
         std::string hstring = header.str().substr(0,-1);
         writer.writeImage( Xj, Yj, Zj, hstring );
     } else {
-        pfs::transformColorSpace(pfs::CS_RGB, Xj, Yj, Zj, pfs::CS_XYZ, Xj, Yj, Zj);
+        if (demosaic || !isbayer)
+            pfs::transformColorSpace(pfs::CS_RGB, Xj, Yj, Zj, pfs::CS_XYZ, Xj, Yj, Zj);
         pfsio.writeFrame(frame, stdout);
     }
 

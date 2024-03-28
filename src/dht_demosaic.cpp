@@ -363,7 +363,6 @@ DHT::DHT(pfs::Array2D *Xj, pfs::Array2D *Yj, pfs::Array2D *Zj) {
     iheight = imgdata[0]->getRows();
     g0 = first_non_zero(Yj);
     r0 = first_non_zero_row(Xj);
-
     nr_height = iheight + nr_topmargin * 2;
     nr_width = iwidth + nr_leftmargin * 2;
     nraw = (float3 *) malloc(nr_height * nr_width * sizeof(float3));

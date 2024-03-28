@@ -89,13 +89,20 @@ float get_exposure_compensationX(const Exposure &ex) {
 }
 
 // Poisson Photon Noise Estimator(PPNE) with rounded peak to reduce
-float get_weight(const Exposure &ex, const double x, const double s){
+float get_weight(const Exposure &ex, const double x, const double s, int wfi){
     // old hat function:
     // y\ =\ \frac{1}{1+e^{-b\cdot\min\left(1-x,x\right)+m}}
 //    return ex.exposure_time / (1+ std::exp(-25 * min(1-x, x) + 5));
     // new PPNE with easing at top
     // y\ =\ \frac{\max\left(x-t,0\right)}{1+3e^{-\frac{\left(1-s-x\right)}{.02}}}
-    return ex.exposure_time  / (1+ 3*std::exp(-(1-x-s)/0.02));
+    switch (wfi){
+        case 1:
+            return x > 1 - x ? x: 1-x;
+        case 2:
+            return 1;
+        default:
+            return ex.exposure_time  / (1+ 3*std::exp(-(1-x-s)/0.02));
+    }
 }
 
 void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3]) {
@@ -109,16 +116,18 @@ void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3
 }
 
 std::tuple<long, long> linear_response(pfs::Array2D *out[],
-                                     const ExposureList *imgs[],
-                                     const float opt_saturation_offset,
-                                     const float opt_black_offset,
-                                     const float scale,
-                                     const float vlambda[3],
-                                     const float rgb_corr[3][3],
-                                     const float oor_high,
-                                     float oor_low,
-                                     bool isbayer,
-                                     const bool demosaic){
+                                       const ExposureList *imgs[],
+                                       const float opt_saturation_offset,
+                                       const float opt_black_offset,
+                                       const float scale,
+                                       const float vlambda[3],
+                                       const float rgb_corr[3][3],
+                                       const float oor_high,
+                                       float oor_low,
+                                       bool isbayer,
+                                       const bool demosaic,
+                                       bool weightworst,
+                                       int wfi){
 
     // governs primary merging, do we check all color channels, or merge channels independently
     isbayer = isbayer or demosaic;
@@ -126,8 +135,10 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
     int g0 = first_non_zero((*imgs[1])[0].yi);
     int r0 = first_non_zero_row((*imgs[0])[0].yi);
 
-    if (isbayer)
+    if (isbayer) {
         VERBOSE_STR << "1st green column: " << g0 << " 1st red row: " << r0 << std::endl;
+        weightworst = false;
+    }
 
     // number of exposures
     int N = imgs[0]->size();
@@ -148,8 +159,8 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
     float lummax = 0;
     float lummin = 1e30;
     float lum;
-    bool saturated_exp; // track sat/under
-    bool under_exp;
+    bool saturated_exp[4]; // track sat/under
+    bool under_exp[4];
 
     // we will calculate the absolute and relative color averages to better match out of bounds values
     // in target color space)
@@ -170,54 +181,99 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
             }
 
             float X[3][N]; // stores the value for each frame
-            float w[N]; // stores the weight for each frame
-            fill(w, w + N, 1.0);
+            float w[4][N]; // stores the weight for each frame
+            for (int cc = 0; cc < 4; cc++)
+                fill(w[cc], w[cc] + N, 1.0);
 
             // only operate on relevant color when isbayer (modifies function of all cc loops)
             if (isbayer) {
                 ccf = grid_color(i, j, g0, r0);
             }
 
-            float div = 0.0f; // track sum of weights for averaging
-            bool all_under = true;
-            bool all_over = true;
+            float div[4] = {0.0, 0.0, 0.0, 0.0}; // track sum of weights for averaging
+            bool all_under[4] = {true, true, true, true};
+            bool all_over[4] = {true, true, true, true};
+            float best_exp[4] = {0.0, 0.0, 0.0, 0.0};
+            int best_exp_i[4] = {-1, -1, -1, -1};
 
             // loop over individual frames, calculating weights
             for (int n = 0; n < N; n++) {
-                saturated_exp = false;
-                under_exp = false;
+                saturated_exp[3] = false;
+                under_exp[3] = false;
                 for (int cc = ccf; cc < 3; cc += cinc) {
                     X[cc][n] = (*(*imgs[cc])[n].yi)(k) * get_exposure_compensationX((*imgs[cc])[n]) * scale;
+                    w[cc][n] = get_weight((*imgs[cc])[n], (*(*imgs[cc])[n].yi)(k), opt_saturation_offset, wfi);
+                    saturated_exp[cc] = ((*(*imgs[cc])[n].yi)(k) >= 1 - opt_saturation_offset);
+                    under_exp[cc] = ((*(*imgs[cc])[n].yi)(k) <= opt_black_offset);
+                    if (!(saturated_exp[cc] || under_exp[cc]) && (*imgs[cc])[n].exposure_time > best_exp[cc]){
+                        best_exp[cc] = (*imgs[cc])[n].exposure_time;
+                        best_exp_i[cc] = n;
+                    }
+                    all_under[cc] &= under_exp[cc];
+                    all_over[cc] &= saturated_exp[cc];
                     // weight by worst color channel
-                    w[n] = min(w[n], get_weight((*imgs[cc])[n], (*(*imgs[cc])[n].yi)(k), opt_saturation_offset));
-                    saturated_exp = ((*(*imgs[cc])[n].yi)(k) >= 1 - opt_saturation_offset) || saturated_exp;
-                    under_exp = ((*(*imgs[cc])[n].yi)(k) <= opt_black_offset) || under_exp;
+                    w[3][n] = min(w[3][n], w[cc][n] );
+                    saturated_exp[3] |= saturated_exp[cc];
+                    under_exp[3] |= under_exp[cc];
+
                 }
-                all_under &= under_exp;
-                all_over &= saturated_exp;
-                if (!(saturated_exp || under_exp)) {
-                    div += w[n];
+                all_under[3] &= under_exp[3];
+                all_over[3] &= saturated_exp[3];
+
+                if (!(saturated_exp[3] || under_exp[3]) && (*imgs[3])[n].exposure_time > best_exp[3]){
+                    best_exp[3] = (*imgs[0])[n].exposure_time;
+                    best_exp_i[3] = n;
+                }
+
+                if (weightworst) {
+                    if (!(saturated_exp[3] || under_exp[3])) {
+                        div[3] += w[3][n];
+                        for (int cc = ccf; cc < 3; cc += cinc) {
+                            (*out[cc])(k) += X[cc][n] * w[3][n];
+                        }
+                    }
+                    // just in case (can end up with a zero weight when finding worst color channel)
+                    // but this should mean it is under-exposed
+                    if (div[3] <= 0 && !all_over[3])
+                        all_under[3] = true;
+                } else {
                     for (int cc = ccf; cc < 3; cc += cinc) {
-                        (*out[cc])(k) += X[cc][n] * w[n];
+                        if (!(saturated_exp[cc] || under_exp[cc])) {
+                            div[cc] += w[cc][n];
+                            (*out[cc])(k) += X[cc][n] * w[cc][n];
+                        }
                     }
                 }
             }
-            // just in case (can end up with a zero weight when finding worst color channel)
-            // but this should mean it is under-exposed
-            if (div <= 0 && !all_over)
-                all_under = true;
+            if (wfi == 2) {
+                if (weightworst) {
+                    if (best_exp_i[3] > -1) {
+                        div[3] = 1;
+                        for (int cc = ccf; cc < 3; cc += cinc)
+                            (*out[cc])(k) = X[cc][best_exp_i[3]];
+                    }
+                } else {
+                    for (int cc = ccf; cc < 3; cc += cinc)
+                        if (!(saturated_exp[cc] || under_exp[cc])) {
+                            div[cc] = 1;
+                            (*out[cc])(k) = X[cc][best_exp_i[cc]];
+                        }
+                }
+            }
 
             // after looping over all frames, now we can
             // flag oob values, correctly weight output and store min/max value
+            int wc;
             for (int cc = ccf; cc < 3; cc += cinc) {
-                if (all_under) {
+                wc = weightworst ? 3 : cc;
+                if (all_under[wc]) {
                     (*out[cc])(k) = -2;
                     under_pixels++;
-                } else if (all_over) {
+                } else if (all_over[wc]) {
                     (*out[cc])(k) = -1;
                     saturated_pixels++;
                 } else {
-                    (*out[cc])(k) = (*out[cc])(k) / div;
+                    (*out[cc])(k) = (*out[cc])(k) / div[wc];
                     // in this case directly store each channel max
                     if (isbayer) {
                         mmax[cc] = (mmax[cc] > (*out[cc])(k)) ? mmax[cc] : (*out[cc])(k);
@@ -229,7 +285,7 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
             // when operating on a demosaiced images, we want to balance max values to luminance
             // (based on the target color space)
             // store min/max luminance and running color averages
-            if (!isbayer && !(all_over || all_under)) {
+            if (!isbayer && !(all_over[3] || all_under[3])) {
                 // apply color transformation
                 apply_color_transform(k, out, rgb_corr);
 
@@ -262,7 +318,7 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
     }
 
     // correct min/max values to luminance (tends to avoid magenta highlights for out of bounds values)
-    if (!isbayer) {
+    if (weightworst) {
         // these get triple counted
         under_pixels = under_pixels / 3;
         saturated_pixels = saturated_pixels / 3;

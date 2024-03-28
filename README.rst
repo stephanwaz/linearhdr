@@ -2,7 +2,7 @@
 linearhdr
 =========
 
-provides a simple command line tool for merging camera raw files into HDR images.
+provides a command line tool for merging camera raw files into HDR images.
 
 Dependencies
 ------------
@@ -11,17 +11,72 @@ For usage:
 
     - exiftool : https://exiftool.org/
     - radiance : https://github.com/LBNL-ETA/Radiance/releases
+    - python (>= 3.7) :  https://www.python.org/
 
 For compiling:
 
     - cmake : https://cmake.org/download/ (also via pip, macports, etc...)
-    - LibRaw::
 
+Installation
+------------
+First, clone this pacakge and LibRaw as a submodule::
+
+        git clone https://github.com/stephanwaz/linearhdr.git
+        cd linearhdr
         git clone https://github.com/LibRaw/LibRaw.git
         cd LibRaw
         git fetch --all --tags
         git checkout 0.21.1
+        cd ..
 
+Then build c++ code command line tools called by pylinearhdr (linearhdr, rawconvert).
+From a command line in this directory::
+
+    mkdir build
+    cd build
+    cmake ..
+    ccmake .. # to check/set install location (default is build/bin), <enter> to edit, then 'c' then 'g'
+    make install
+
+make sure that your install location is in you $PATH.
+
+Then install pylinearhdr (recommend creating a virtual environment and using pip, or other package manager such as conda)::
+
+    pip3 install .
+
+Upgrading
+---------
+to upgrade::
+
+    git pull
+    cd build
+    make clean
+    cmake ..
+    make install
+    cd ..
+    pip install . --upgrade
+
+Getting Started
+---------------
+Primarily all operations can be completed using the pylinearhdr command. See pylinearhdr --help for a list of subcommands. Merging
+is done with pylinearhdr run "raw files" > merged.hdr. See pylinearhdr run --help for detailed settings. As an alternative to the run
+command, the input list for linearhdr can be generated with pylinearhdr makelist "raw files" > merge_list.txt, which has most of the same
+parameters. This allows for a two step process in case you would like to do any manual manipulation to the merge_list file.
+
+Calibration
+-----------
+One of the main values in using pylinearhdr is that it provides an interface to include shutter speed, aperture, linearity, and
+color/luminance calibration. These parameters can be saved in a .cfg file and loaded as::
+
+    pylinearhdr -c calibration.cfg run "raw files" > merged.hdr
+
+See::
+
+    pylinearhdr shutter --help
+    pylinearhdr aperture --help
+    pylinearhdr calibrate --help
+
+for procedures.
 
 License, Copyrights and Acknowledgements
 ----------------------------------------

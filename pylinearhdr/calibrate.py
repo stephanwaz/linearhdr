@@ -145,7 +145,7 @@ def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad', tes
     return result, refd, B
 
 
-def load_data(imgf, cells, zero=False, lum=False, checkimg=None, mean=True, stdev=False, scale=179):
+def load_data(imgf, cells, zero=0, lum=False, checkimg=None, mean=True, stdev=False, scale=179):
     lumrgb = [0.265, 0.670, 0.065]
     if cells is None:
         return np.loadtxt(imgf).T
@@ -162,8 +162,12 @@ def load_data(imgf, cells, zero=False, lum=False, checkimg=None, mean=True, stde
     for cell in cells:
         x1, y1, x2, y2 = cell
         mask[:, x1:x1+x2, y1:y1+y2] += 1
-        if zero and np.any(img[:, x1:x1+x2, y1:y1+y2] == 0):
+        zeros = img[:, x1:x1+x2, y1:y1+y2] == 0
+        if (zero == 2 and np.any(zeros)) or (zero == 1 and np.all(zeros)):
             data.append(np.zeros(img.shape[0]))
+        elif zero == 1:
+            rgb = np.average(img[:, x1:x1+x2, y1:y1+y2], axis=(1, 2), weights=np.logical_not(zeros))
+            data.append(rgb)
         else:
             rgb = np.average(img[:, x1:x1+x2, y1:y1+y2], axis=(1, 2))
             data.append(rgb)
@@ -435,10 +439,16 @@ def load_test_cells_simul(img1, img2):
     return cells1, cells2
 
 
-def average_green(img, croparg, runopts=""):
+def average_channel(img, croparg, runopts="", channel="g"):
     """return average green value and fraction in range for a single frame and crop area"""
-    runcom = [f"pylinearhdr run {runopts} -colorspace raw -hdropts ' -m 0 -x 0 --tsv' --half {croparg} '{img}'",
-              "getinfo -d -", "rcalc -e '$1=$2;cond=$2;$2=1'", 'total -m']
+    chdict = dict(r=1, g=2, b=3)
+    gf = [0, 4, 2, 4]
+    if hasattr(channel, "lower"):
+        channel =chdict[channel[0].lower()]
+    else:
+        channel = int(channel + 1)
+    runcom = [f"pylinearhdr run {runopts} -colorspace raw -hdropts ' -m 0 -x 0 --tsv' --rawgrid {croparg} '{img}'",
+              "getinfo -d -", f"rcalc -e '$1=${channel};$2=1;$3=if(${channel},1,0)'", "total", f"rcalc -w -e '$1=$1/$3;$2=$3/$2*{gf[channel]}'"]
     info = list(pl.info_from_exif(img.split()[0], True, False))
     result = [float(i) for i in pipeline(runcom).strip().split()]
     if len(result) != 2:
