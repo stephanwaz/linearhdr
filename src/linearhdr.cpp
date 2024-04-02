@@ -96,11 +96,13 @@ float get_weight(const Exposure &ex, const double x, const double s, int wfi){
     // new PPNE with easing at top
     // y\ =\ \frac{\max\left(x-t,0\right)}{1+3e^{-\frac{\left(1-s-x\right)}{.02}}}
     switch (wfi){
-        case 1:
+        case 1: // 'h' simple hat function
             return x > 1 - x ? x: 1-x;
-        case 2:
+        case 2: // 't' only longest exposure is used
             return 1;
-        default:
+        case 0: // 'p' poisson noise estimation weighting
+            return ex.exposure_time;
+        default: // 's' poisson noise estimation weighting (weight by exposure, easing out of range pixels)
             return ex.exposure_time  / (1+ 3*std::exp(-(1-x-s)/0.02));
     }
 }

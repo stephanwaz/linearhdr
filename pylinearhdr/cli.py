@@ -813,6 +813,9 @@ def aperture(ctx, seq=None, crop=None, shutterc=None, **kwargs):
                    "\t rad: (0.640, 0.330, 0.290, 0.600, 0.150, 0.060, 0.3333, 0.3333)\n"
                    "\t srgb: (0.640,  0.330,  0.300,  0.600,  0.150,  0.060, 0.3127, 0.329)\ncolorformat:\n"
                    "\t xyz")
+@click.option("-xyzcam", default=None, callback=clk.split_float,
+              help="optional xyzcam for input to override/provide XYZCAM= header information. If not given, and not found,"
+                   " refcol is assumed.")
 @click.option("-refdataout", default=None,
               help="if given, save reference data to this path in XYZ")
 @click.option("-testdataout", default=None,
@@ -823,7 +826,7 @@ def aperture(ctx, seq=None, crop=None, shutterc=None, **kwargs):
 @click.option("-minimizer", type=click.Choice(['luv', 'lab'], case_sensitive=False), default='luv')
 @click.option("--verbose/--no-verbose", default=False, help="print detailed results")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=False, refdataout=None, testdataout=None,
+def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', xyzcam=None, alternate=False, refdataout=None, testdataout=None,
               verbose=False, minimizer='luv', **kwargs):
     """run color luminance calibration using reference data (or image) and test hdr
     (shutter and aperture corrected, but raw color)
@@ -837,8 +840,8 @@ def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=Fa
     test: merged hdr image of the calibration scene, should be self-calibrated for shutter and aperture, but output
         in raw (-colorspace raw in pylinearhdr run) if rgb=True or reference data is 3-channel. otherwise
         output in target color space (RGB or sRGB). If test was made with another program and does not have "XYZCAM"
-        header line, then test is assumed to be in the same color space as reference (given by -refcol). Note that even
-        if reference is greyscale, this will still apply (just not to the reference).
+        header line, then test is assumed to be in the same color space as reference (given by -refcol) unless xyzcam is given.
+        Note that even if reference is greyscale, this will still apply (just not to the reference).
 
     """
     def _is_hdr(imgf):
@@ -852,8 +855,9 @@ def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=Fa
     if not (refimg and testimg) and alternate:
         print("Warning reference or test is not an HDR, so setting alternate to False", file=sys.stderr)
         alternate = False
-
-    result, A, B = cl.calibrate(reference, test, rc, tc, alternate, refimg, refcol, testimg=testimg, minimizer=minimizer)
+    if xyzcam:
+        xyzcam = np.array(xyzcam).reshape(3,3)
+    result, A, B = cl.calibrate(reference, test, rc, tc, alternate, refimg, refcol, xyz_cam=xyzcam, testimg=testimg, minimizer=minimizer)
     if refdataout:
         np.savetxt(refdataout, A.T)
     if testdataout:
@@ -871,7 +875,7 @@ def calibrate(ctx, reference, test, rc=None, tc=None, refcol='rad', alternate=Fa
                 print(f"{c:02d}  {i: >10.02}")
     print("xyzcam matrix:")
     for k, v in result.items():
-        print(f"{v['label']+':':<33} " + " ".join([f"{i:.06f}" for i in v['xyzcam'].ravel()]))
+        print(f"{v['label']+':':<40} " + " ".join([f"{i:.06f}" for i in v['xyzcam'].ravel()]))
 
 
 @main.command()

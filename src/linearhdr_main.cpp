@@ -198,8 +198,8 @@ void linearhdr_main(int argc, char *argv[]) {
     bool demosaic = false;
     bool ignore = false;
     bool weightworst = true;
-    std::string wf = "p";
-    int wfi = 0;
+    std::string wf = "s";
+    int wfi;
     float oor_high = -1;
     float oor_low = -1;
     bool donl = false;
@@ -241,7 +241,7 @@ void linearhdr_main(int argc, char *argv[]) {
             { "oob-high", required_argument, nullptr, 'x' },
             { "ignore", no_argument, nullptr, 'G' },
             { "we", no_argument, nullptr, 'w' }, //undocumented if false weights by channels independently
-            { "wf", required_argument, nullptr, 'f' }, //undocumented weighting function
+            { "wf", required_argument, nullptr, 'f' }, //undocumented weighting function h (hat),t (top),p (poisson noise), ,s (poisson noise with easing, Default)
             {nullptr, 0,                         nullptr, 0}
     };
 
@@ -366,9 +366,12 @@ void linearhdr_main(int argc, char *argv[]) {
         case 't':
             wfi = 2;
             break;
+        case 's':
+            wfi = 3;
+            break;
         default:
             char message[100];
-            snprintf(message, 100, "--wf must be one of h (hat),t (top),p (poisson noise) parsed: %s", wf.c_str());
+            snprintf(message, 100, "--wf must be one of h (hat),t (top),p (poisson noise), ,s (poisson noise with easing) parsed: %s", wf.c_str());
             throw pfs::Exception(message);
     }
 

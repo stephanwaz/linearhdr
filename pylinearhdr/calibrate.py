@@ -40,7 +40,7 @@ def hdr_get_primaries(img, defp=(0.640, 0.330, 0.290, 0.600, 0.150, 0.060),
     return pri
 
 
-def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad', testimg=True, minimizer='luv'):
+def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad', xyz_cam=None, testimg=True, minimizer='luv'):
     minfuncdict = dict(luv=color_diff_mtx_uv, lab=color_diff_mtx)
     minfunc = minfuncdict[minimizer]
     rcells = None
@@ -58,27 +58,26 @@ def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad', tes
     # get reference colorspace
     rgb_xyz, _ = pl.prep_color_transform(refcol, 'xyz')
     xyz_rgb = np.linalg.inv(rgb_xyz)
-    if testimg:
+    # assume test is in same space as reference
+    cam_xyz = rgb_xyz
+    # override assumptions
+    if xyz_cam is not None:
+        cam_xyz = np.linalg.inv(xyz_cam)
+    elif testimg:
         cst = hdr_get_primaries(test, None, None)
         xyz_cam = io.hdr_header(test, items=["XYZCAM"])[0]
-    else:
-        cst = (None, None)
-        xyz_cam = []
-    # check if test is in a colorspace
-    if cst[0] is not None:
-        cam_xyz = pl.pw_mtx(*cst)
-    # check in test has initial transform matrix
-    elif len(xyz_cam) > 0:
-        xyz_cam = np.array([float(i) for i in xyz_cam.split()]).reshape(3, 3)
-        premult = io.hdr_header(test, items=["CAM_PREMULTIPLIERS"])[0]
-        if len(premult) > 0:
-            premult = np.array([float(i) for i in premult.split()])[:, None]
-            testd = testd / premult
-            xyz_cam = xyz_cam / premult
-        cam_xyz = np.linalg.inv(xyz_cam)
-    # assume test is in same space as reference
-    else:
-        cam_xyz = rgb_xyz
+        # check if test is in a colorspace
+        if cst[0] is not None:
+            cam_xyz = pl.pw_mtx(*cst)
+        # check in test has initial transform matrix
+        elif len(xyz_cam) > 0:
+            xyz_cam = np.array([float(i) for i in xyz_cam.split()]).reshape(3, 3)
+            premult = io.hdr_header(test, items=["CAM_PREMULTIPLIERS"])[0]
+            if len(premult) > 0:
+                premult = np.array([float(i) for i in premult.split()])[:, None]
+                testd = testd / premult
+                xyz_cam = xyz_cam / premult
+            cam_xyz = np.linalg.inv(xyz_cam)
 
     popts = np.get_printoptions()
     np.set_printoptions(5, suppress=True)
@@ -122,8 +121,8 @@ def calibrate(ref, test, rc, tc, alternate=False, refimg=True, refcol='rad', tes
                                          method='SLSQP', options=dict(maxiter=100)).x.reshape(3, 3)
 
         result = dict(start=dict(xyzcam=np.linalg.inv(cam_xyz), label="Default Matrix"),
-                      lum=dict(xyzcam=np.linalg.inv(cam_xyz * lum_scale), label="Luminance Least Squares"),
-                      rgb=dict(xyzcam=np.linalg.inv(cam_xyz * rgb_scale[:, None]), label="RGB Least Squares"),
+                      lum=dict(xyzcam=np.linalg.inv(cam_xyz * lum_scale), label=f"Luminance Least Squares ({lum_scale:.03f})"),
+                      rgb=dict(xyzcam=np.linalg.inv(cam_xyz * rgb_scale[:, None]), label=f"RGB Least Squares ({rf[0]:.03f},{gf[0]:.03f},{bf[0]:.03f})"),
                       lopt=dict(xyzcam=np.linalg.inv(cam_xyz_opt), label="Color Matrix Optimization"),
                       nopt=dict(xyzcam=np.linalg.inv(cam_xyz_opt2), label=f"Color Matrix SLSQP Minimization ({minimizer})"))
 
