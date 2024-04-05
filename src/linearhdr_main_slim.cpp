@@ -138,7 +138,6 @@ void printHelp() {
                     "\t Note that if three sets are given, the last coeffs will apply to all exposure times regardless of 'm'\n"
                     "\t t*a*x**2 + t*b*x + 1+t*c\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
-                    "\t[--bayer, -B]: expect mosaic input (rawconvert --disinterp) ignores color correction in exposure_list header\n"
                     "\t[--debayer, -D]: interpolate hdr output, overrides --bayer, but expects same input (rawconvert --disinterp)\n"
                     "\t[--pfs, -P]: output pfs stream\n"
                     "\t[--exact, -e]: input camera values interpreted as exact (default=True)\n"
@@ -170,12 +169,8 @@ void linearhdr_main(int argc, char *argv[]) {
     bool tsv = false;
     bool rgbe = true;
     bool nominal = false;
-    bool isbayer = false;
     bool demosaic = false;
     bool ignore = false;
-    bool weightworst = true;
-    std::string wf = "s";
-    int wfi;
     float oor_high = -1;
     float oor_low = -1;
     float rgb_corr[3][3] = {{1.0, 0.0, 0.0},
@@ -197,7 +192,6 @@ void linearhdr_main(int argc, char *argv[]) {
             {"rgbe",    no_argument,       nullptr, 'R'},
             {"pfs",    no_argument,       nullptr, 'P'},
             {"exact",    no_argument,       nullptr, 'e'},
-            {"bayer",    no_argument,       nullptr, 'B'},
             {"debayer",    no_argument,       nullptr, 'D'},
             {"nominal",    no_argument,       nullptr, 'n'},
             {"tsv", no_argument, nullptr, 't'},
@@ -211,15 +205,13 @@ void linearhdr_main(int argc, char *argv[]) {
             { "oob-low", required_argument, nullptr, 'm' },
             { "oob-high", required_argument, nullptr, 'x' },
             { "ignore", no_argument, nullptr, 'G' },
-            { "we", no_argument, nullptr, 'w' }, //undocumented if false weights by channels independently
-            { "wf", required_argument, nullptr, 'f' }, //undocumented weighting function h (hat),t (top),p (poisson noise), ,s (poisson noise with easing, Default)
             {nullptr, 0,                         nullptr, 0}
     };
 
     std::stringstream k; //to read in multivalue arguments
     int optionIndex = 0;
     int ci = 0;
-    while ((c = getopt_long(argc, argv, "hnevutGBDRwd:s:r:o:m:x:k:C:f:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevutGDRd:s:r:o:m:x:k:C:", cmdLineOptions, &optionIndex)) != -1) {
         ci++;
         if (strlen(argv[ci]) > 2 && argv[ci][1] != '-'){
             char message[100];
@@ -241,11 +233,7 @@ void linearhdr_main(int argc, char *argv[]) {
             case 'e':
                 nominal = false;
                 break;
-            case 'B':
-                isbayer = true;
-                break;
             case 'D':
-                isbayer = false;
                 demosaic = true;
                 break;
             case 'x':
@@ -258,13 +246,6 @@ void linearhdr_main(int argc, char *argv[]) {
             case 'm':
                 ci++;
                 oor_low = atof(optarg);
-                break;
-            case 'f':
-                ci++;
-                k.str("");
-                k.clear();
-                k << optarg[0];
-                wf = k.str();
                 break;
             case 'o':
                 ci++;
@@ -308,35 +289,10 @@ void linearhdr_main(int argc, char *argv[]) {
             case 'P':
                 rgbe = false;
                 break;
-            case 'w':
-                weightworst = false;
-                break;
             default:
                 throw QuietException();
         }
     }
-
-
-    switch(wf.at(0)) {
-        case 'p':
-            wfi = 0;
-            break;
-        case 'h':
-            wfi = 1;
-            break;
-        case 't':
-            wfi = 2;
-            break;
-        case 's':
-            wfi = 3;
-            break;
-        default:
-            char message[100];
-            snprintf(message, 100, "--wf must be one of h (hat),t (top),p (poisson noise), ,s (poisson noise with easing) parsed: %s", wf.c_str());
-            throw pfs::Exception(message);
-    }
-
-
 
     if (argv[optind] == nullptr){
         printHelp();
@@ -388,13 +344,13 @@ void linearhdr_main(int argc, char *argv[]) {
                     std::string comment = iss.str();
                     const uint begin =  comment.find_first_not_of("# \t");
                     const uint equal = comment.find_first_of('=');
-                    if (!isbayer && comment.substr(begin, equal - begin) == "Camera2RGB"){
+                    if (demosaic && comment.substr(begin, equal - begin) == "Camera2RGB"){
                         istringstream ss(comment.substr(equal+1, comment.size()));
                         ss >> rgb_corr[0][0] >> rgb_corr[0][1] >> rgb_corr[0][2];
                         ss >> rgb_corr[1][0] >> rgb_corr[1][1] >> rgb_corr[1][2];
                         ss >> rgb_corr[2][0] >> rgb_corr[2][1] >> rgb_corr[2][2];
                     }
-                    if (!isbayer && comment.substr(begin, equal - begin) == "RGBcalibration"){
+                    if (demosaic && comment.substr(begin, equal - begin) == "RGBcalibration"){
                         istringstream ss(comment.substr(equal+1, comment.size()));
                         ss >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
                     }
@@ -532,9 +488,9 @@ void linearhdr_main(int argc, char *argv[]) {
     const ExposureList *exposures[] = {&imgsR, &imgsG, &imgsB};
 
     VERBOSE_STR << "merging hdr..." << endl;
-    auto [saturated_pixels, under_pixels] = linear_response(RGB_out, exposures, opt_saturation_offset_perc,
-                         opt_black_offset_perc, opt_scale, vlambda, rgb_corr,
-                         oor_high, oor_low, isbayer, demosaic, weightworst, wfi);
+    auto [saturated_pixels, under_pixels] = linear_response_slim(RGB_out, exposures, opt_saturation_offset_perc,
+                         opt_black_offset_perc, opt_scale, rgb_corr,
+                         oor_high, oor_low, demosaic);
 
     if (under_pixels > 0) {
         header  << cprefix << "UNDEREXPOSED_PIXEL_CNT= " << under_pixels << endl;
@@ -569,7 +525,7 @@ void linearhdr_main(int argc, char *argv[]) {
         std::string hstring = header.str().substr(0,-1);
         writer.writeImage( Xj, Yj, Zj, hstring );
     } else {
-        if (demosaic || !isbayer)
+        if (demosaic)
             pfs::transformColorSpace(pfs::CS_RGB, Xj, Yj, Zj, pfs::CS_XYZ, Xj, Yj, Zj);
         pfsio.writeFrame(frame, stdout);
     }

@@ -104,6 +104,7 @@ void usage(const char *prog)
          "          filename.suf => output to filename.suf\n"
          "-disinterp Do not run interpolation step\n"
          "-h         Half-size color image\n"
+         "-C <r b>  Correct chromatic aberration\n"
          "-q N      Set the interpolation quality:\n"
          "          0 - linear, 1 - VNG, 2 - PPG, 3 - AHD, 4 - DCB\n"
          "          11 - DHT, 12 - AAHD\n"
@@ -240,7 +241,7 @@ int main(int argc, char *argv[])
   {
     char *optstr = argv[arg];
     opt = argv[arg++][1];
-    if ((cp = strchr(sp = (char *)"cnbrkStqmHABCgU", opt)) != 0)
+    if ((cp = strchr(sp = (char *)"cnbrkStqmHABCgUC", opt)) != 0)
       for (i = 0; i < "111411111144221"[cp - sp] - '0'; i++)
         if (!isdigit(argv[arg + i][0]) && !optstr[2])
         {
@@ -277,6 +278,10 @@ int main(int argc, char *argv[])
     case 'B':
       for (c = 0; c < 4; c++)
         OUT.cropbox[c] = atoi(argv[arg++]);
+      break;
+    case 'C':
+      OUT.aber[0] = 1 / atof(argv[arg++]);
+      OUT.aber[2] = 1 / atof(argv[arg++]);
       break;
     case 'T':
       OUT.output_tiff = 1;

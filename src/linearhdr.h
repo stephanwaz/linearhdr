@@ -83,6 +83,8 @@ public:
  */
 typedef std::vector<Exposure> ExposureList;
 
+struct FrameInfo {float etime; float iso; float aperture; float factor;};
+
 std::tuple<long, long> linear_response(pfs::Array2D *rgb_out[],
                                     const ExposureList *imgs[],
                                     const float opt_saturation_offset,
@@ -96,6 +98,16 @@ std::tuple<long, long> linear_response(pfs::Array2D *rgb_out[],
                                     const bool demosaic = false,
                                     bool weightworst = true,
                                     int wfi = 0);
+
+std::tuple<long, long> linear_response_slim(pfs::Array2D *out[],
+                                    const ExposureList *imgs[],
+                                    const float opt_saturation_offset,
+                                    const float opt_black_offset,
+                                    const float scale,
+                                    const float rgb_corr[3][3],
+                                    const float oor_high,
+                                    float oor_low,
+                                    const bool demosaic);
 
 void dht_interpolate(pfs::Array2D *Xj, pfs::Array2D *Yj, pfs::Array2D *Zj);
 

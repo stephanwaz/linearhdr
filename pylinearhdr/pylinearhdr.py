@@ -185,7 +185,7 @@ def rawconvert_opts(img, crop=None, bad_pixels=None, rawgrid=False, black="PerCh
     if crop is not None:
         cs = "-B {} {} {} {}".format(*crop)
     if bad_pixels is not None:
-        cs += f" -P {bad_pixels}"
+        cs += f" -P {bad_pixels.rsplit('/',1)[-1]}"
     if half:
         cs += " -h"
     elif rawgrid:

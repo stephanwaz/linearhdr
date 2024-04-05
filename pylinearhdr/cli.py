@@ -183,10 +183,6 @@ shared_run_opts = [
                       "(primaries + wp) the cam2rgb matrix and output primaries are written into the make_list header and "
                       " added to the output hdr header by linearhdr"),
     click.option("-xyzcam", callback=clk.split_float, help="custom xyz->cam matrix, if not given uses raw-identify"),
-    click.option("-nlcorr", callback=clk.split_float,
-                 help="non-linear response correction give as nine values representing third order polynomial "
-                      "coefficients for R, G, B (with 0 intercept) e.g. if the first three values are a,b,c, "
-                      "red will be corrected by R-(aR^3+bR^2+cR)"),
     click.option("-fo", "-f-overrides", callback=clk.tup_float,
                  help="if given, sets --correct to True. pairs of nominal/exact aperture values to correct. any aperture"
                       " not given will use the standard correction. for example give 11,11.4 22,23 to override standard"
@@ -209,11 +205,12 @@ shared_run_opts = [
                  help="override default premultipliers (1, 1, 1)"),
     click.option("--verbose/--no-verbose", default=False,
                  help="passed to linearhdr"),
-    click.option("--interpfirst/--interpsecond", default=True,
-                 help="interpolate with rawconvert (uses -interpq unless --half) or interpolate after merge (uses DHT)"),
+    click.option("--interpfirst/--interpsecond", default=False,
+                 help="default (false) interpolate after merge (uses DHT), if true,"
+                      "interpolate with rawconvert (uses -interpq unless --half) or"),
     click.option("-interpq", default="DHT",
                  type=click.Choice(["linear", "VNG", "PPG", "AHD", "DCB", "DHT", "AAHD"], case_sensitive=False),
-                 help="demosaicing algorithm"),
+                 help="demosaicing algorithm, only used if --interpfirst, otherwise DHT"),
     click.option("--half/--no-half", default=False,
                  help="use half-scale output from rawconvert, disables --interpsecond and --rawgrid"),
     click.option("--rawgrid/--no-rawgrid", default=False,
@@ -226,26 +223,32 @@ shared_run_opts = [
                  help="run rawconvert even if output file exists"),
     click.option("-header-line", '-hl', multiple=True,
                  help="lines to append to HDR header, e.g. LOCATION= 46.522833,6.580500"),
+    click.option("-executable", default="linearhdr",
+                 help="linearhdr executable"),
     click.option("--correct/--no-correct", default=True,
                  help="apply correction to nominal aperture and shutter speed values, use with linearhdr --exact"),
     click.option("--listonly/--no-listonly", default=False,
                  help="skip execution and just print metadata"),
-    click.option("--premult/--no-premult", default=False,
-                 help="normalize xyzcam matrix and premultiply raw channels to compensate. This will correct any"
-                      " colorshift near out of bounds values at the expense of offsetting the valid raw camera range. "
-                      "If the HDR sequence is safely in range, set this to false, otherwise true may yield better results."
-                      " Do not use with -nlcorr"),
     click.option("-hdropts", default="", help="additional options to linearhdr (with callhdr, overrides -r -s)"),
+    click.option("-rawcopts", default="", help="additional options to rawconvert, for example: ' -C 0.999 9.999'"),
     click.option("-crop", callback=clk.split_int,
                  help="crop tiff (left upper W H)"),
 ]
 
 
 def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
-                 crop=None, badpixels=None, callhdr=False, hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
+                 crop=None, badpixels=None, callhdr=False, rawcopts="", hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
                  black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
-                 interpfirst=True, premult=False, header_line=None, half=False, nlcorr=None, rawmultipliers=None, interpq="DHT", **kwargs):
+                 interpfirst=False, header_line=None, half=False, rawmultipliers=None, interpq="DHT", executable="linearhdr", **kwargs):
     """make list routine, use to generate input to linearhdr"""
+    if executable == "linearhdr":
+        needs_full = "-wf" in hdropts or "-f" in hdropts
+        needs_ext = "--we" in hdropts or ("-w" in hdropts and not needs_full)
+        maybe_slim = rawgrid or not interpfirst
+        if needs_ext:
+            executable = "linearhdr_full"
+        elif maybe_slim and not needs_full:
+            executable = "linearhdr_slim"
     if half:
         interpfirst = True
         rawgrid = False
@@ -254,17 +257,12 @@ def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scal
     else:
         header_line = list(header_line)
     multipliers = np.array([1, 1, 1])
-    nlcorropt = ""
-    if nlcorr is not None:
-        if len(nlcorr) != 9:
-            raise ValueError(f"nlcorr should have nine components, {len(nlcorr)} given.")
-        nlstr = " ".join([f"{i:.05f}" for i in nlcorr])
-        nlcorropt = f" --nlcorr '{nlstr}' "
     if verbose:
         hdropts += " --verbose"
     if rawgrid:
         colorspace = 'raw'
-        hdropts += " -B"
+        if executable != "linearhdr_slim":
+            hdropts += " -B"
     elif not interpfirst:
         hdropts += " -D"
     outf = sys.stdout
@@ -279,12 +277,9 @@ def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scal
     if xyzcam is None:
         xyzcam = pl.get_xyz_cam(imgs[0])
     xyzcam = np.asarray(xyzcam).reshape(3, 3)
-    if premult:
-        rowsum = np.sum(xyzcam, axis=1)
-        multipliers = np.max(rowsum)/rowsum
     if rawmultipliers is not None:
         multipliers = np.array(rawmultipliers)[0:3]
-    rawcopts = '-r ' + " ".join([f"{i:.06f}" for i in multipliers]) + f" {multipliers[1]:.06f}"
+    rawcopts += ' -r ' + " ".join([f"{i:.06f}" for i in multipliers]) + f" {multipliers[1]:.06f}"
     xyzcam = xyzcam * multipliers[:, None]
     rawconvertcom = pl.rawconvert_opts(imgs[0], crop=crop, bad_pixels=badpixels, rawgrid=rawgrid or (not interpfirst),
                                        black=black, white=white, rawcopts=rawcopts, half=half, interpq=interpq)
@@ -308,7 +303,7 @@ def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scal
     for h in header_line:
         print(f"# {h}", file=outf)
     pl.report(tiffs, listonly, scale=scale * 10**nd, sat_w=1-saturation, sat_b=range, outf=outf)
-    command = [f"linearhdr -r {range} -o {saturation}{nlcorropt} {hdropts} {outfn}"]
+    command = [f"{executable} -r {range} -o {saturation} {hdropts} {outfn}"]
     if fisheye:
         command += ["raytools solid2ang -"]
     if vfile is not None:

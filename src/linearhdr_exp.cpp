@@ -63,7 +63,7 @@
 using namespace std;
 
 
-#define PROG_NAME "linearhdr"
+#define PROG_NAME "linearhdr_full"
 
 extern bool verbose; /* verbose should be declared for each standalone code */
 
@@ -84,6 +84,7 @@ int grid_color(int i, int j, int g0, int r0) {
     if (i % 2 == r0)
         return 0;
     // is blue row
+
     return 2;
 }
 
@@ -93,7 +94,16 @@ float get_exposure_compensation(const Exposure &ex) {
 }
 
 float get_weight(const Exposure &ex, const double x, const double s, int wfi){
-    return ex.exposure_time  / (1+ std::exp(-(0.88-x-s)/0.012));
+    switch (wfi){
+        case 1: // 'h' simple hat function
+            return 1.4918*std::exp(-.1 * (1/x + 1/(1-x)));
+        case 3: // 's' poisson noise estimation weighting (weight by exposure, easing out of range pixels)
+            return ex.exposure_time  / (1+ std::exp(-(0.88-x-s)/0.012));
+        default: // 'p' poisson noise estimation weighting
+            // also used by 't' only longest exposure is used
+            return ex.exposure_time;
+
+    }
 }
 
 void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3]) {
@@ -163,17 +173,98 @@ void merge_worst(pfs::Array2D *out[],
     }
 }
 
+// merge a demosaic image weighting each channel independently
+void merge_each(pfs::Array2D *out[],
+                 const ExposureList *imgs[],
+                 float div[4],
+                 int k,
+                 const float opt_black_offset,
+                 const float opt_saturation_offset,
+                 const int wfi,
+                 bool all_under[4],
+                 bool all_over[4]) {
+    bool saturated_exp;
+    bool under_exp;
+    float best_exp[3] = {0.0, 0.0, 0.0};
+    int N = imgs[0]->size();
+    float w[3][N]; // stores the weight for each frame
+    float X[3][N]; // stores the value for each frame
+    for (int cc = 0; cc < 3; cc++)
+        fill(w[cc], w[cc] + N, 0.0);
+    // loop over individual frames, calculating weights
+    for (int n = 0; n < N; n++) {
+        for (int cc = 0; cc < 3; cc++) {
+            X[cc][n] = (*(*imgs[cc])[n].yi)(k) * get_exposure_compensation((*imgs[cc])[n]);
+            w[cc][n] = get_weight((*imgs[cc])[n], (*(*imgs[cc])[n].yi)(k), opt_saturation_offset, wfi);
+            saturated_exp = (*(*imgs[cc])[n].yi)(k) >= 1 - opt_saturation_offset;
+            under_exp = (*(*imgs[cc])[n].yi)(k) <= opt_black_offset;
+            all_under[cc] &= under_exp;
+            all_over[cc] &= saturated_exp;
+            if (!(saturated_exp || under_exp)) {
+                if (wfi == 2 && w[cc][n] > best_exp[cc]) {
+                    best_exp[cc] = w[cc][n];
+                    div[cc] = 1;
+                    (*out[cc])(k) = X[cc][n];
+                } else {
+                    div[cc] += w[cc][n];
+                    (*out[cc])(k) += X[cc][n] * w[cc][n];
+                }
+            }
+        }
+    }
+}
+
+// merge a mosaic image
+void merge_bayer(pfs::Array2D *out[],
+                 const ExposureList *imgs[],
+                 float& div,
+                 int k,
+                 int cc,
+                 const float opt_black_offset,
+                 const float opt_saturation_offset,
+                 const int wfi,
+                 bool& all_under,
+                 bool& all_over) {
+    bool saturated_exp;
+    bool under_exp;
+    float best_exp = 0.0;
+    int N = imgs[0]->size();
+    float w[N]; // stores the weight for each frame
+    float X[N]; // stores the value for each frame
+    fill(w, w + N, 0.0);
+    // loop over individual frames, calculating weights
+    for (int n = 0; n < N; n++) {
+        X[n] = (*(*imgs[cc])[n].yi)(k) * get_exposure_compensation((*imgs[cc])[n]);
+        w[n] = get_weight((*imgs[cc])[n], (*(*imgs[cc])[n].yi)(k), opt_saturation_offset, wfi);
+        saturated_exp = (*(*imgs[cc])[n].yi)(k) >= 1 - opt_saturation_offset;
+        under_exp = (*(*imgs[cc])[n].yi)(k) <= opt_black_offset;
+        all_under &= under_exp;
+        all_over &= saturated_exp;
+        if (!(saturated_exp || under_exp)) {
+            if (wfi == 2 && w[n] > best_exp) {
+                best_exp = w[n];
+                div = 1;
+                (*out[cc])(k) = X[n];
+            } else {
+                div += w[n];
+                (*out[cc])(k) += X[n] * w[n];
+            }
+        }
+
+    }
+}
+
 // merge a mosaic image considering adjacent pixels
 // helps to detect sensor blooming
 void merge_bayer_worst(pfs::Array2D *out[],
-                       const ExposureList *imgs[],
-                       float div[4],
-                       int i, int j, int r0, int g0,
-                       const float opt_black_offset,
-                       const float opt_saturation_offset,
-                       const int wfi,
-                       bool all_under[4],
-                       bool all_over[4]) {
+                 const ExposureList *imgs[],
+                 float div[4],
+                 int i, int j, int r0, int g0,
+                 const float opt_black_offset,
+                 const float opt_saturation_offset,
+                 const int wfi,
+                 bool all_under[4],
+                 bool all_over[4]) {
     bool saturated_exp;
     bool under_exp;
     float best_exp = 0.0;
@@ -293,12 +384,18 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
             float div[4] = {0.0, 0.0, 0.0, 0.0}; // track sum of weights for averaging
             bool all_under[4] = {true, true, true, true};
             bool all_over[4] = {true, true, true, true};
-            if (isbayer) {
+            if (isbayer && weightworst) {
                 ccf = grid_color(i, j, g0, r0);
                 merge_bayer_worst(out, imgs, div, i, j, r0, g0, opt_black_offset, opt_saturation_offset, wfi, all_under,
                             all_over);
-            } else
+            } else if (isbayer) {
+                ccf = grid_color(i, j, g0, r0);
+                merge_bayer(out, imgs, div[ccf], k, ccf, opt_black_offset, opt_saturation_offset, wfi, all_under[ccf],
+                            all_over[ccf]);
+            } else if (weightworst)
                 merge_worst(out, imgs, div[3], k, opt_black_offset, opt_saturation_offset, wfi, all_under[3], all_over[3]);
+            else
+                merge_each(out, imgs, div, k, opt_black_offset, opt_saturation_offset, wfi, all_under, all_over);
 
             // after looping over all frames, now we can
             // flag oob values, correctly weight output and store min/max value

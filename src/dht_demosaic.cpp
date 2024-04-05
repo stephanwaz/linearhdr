@@ -70,7 +70,7 @@ static inline float calc_dist(float c1, float c2) {
 //edit: better to pass non-zero values when that is the desired effect
 //this results in NAN when one channel in denominator is 0, wiping out any pixels
 //take information from a zero pixel.
-static const float FLOOR = 0.0;
+static const float FLOOR = 0.00001;
 
 struct DHT {
     int nr_height, nr_width, iwidth, iheight; //SW
@@ -96,20 +96,20 @@ struct DHT {
         RULDSH = RULD | DIASH,
     };
 
-    static inline float Tg(void) throw() { return 256.0f; } // big difference in horizontal/vertical gradients
+    static inline float Tg() noexcept { return 256.0f; } // big difference in horizontal/vertical gradients
 
-    static inline float T(void) throw() { return 1.4f; } // big difference in diagonal gradients
+    static inline float T() noexcept { return 1.4f; } // big difference in diagonal gradients
 
     char *ndir; // array for interpolation codes
 
     //SW renamed to shorten expressions
     //for uniformity would be better to change nraw to 2Darray
-    inline int nro(int row, int col) throw() {
+   inline unsigned long nro(int row, int col) const noexcept {
         return (row * nr_width + col);
     }
 
     // pick horizontal or vertical at non-green pixels
-    int get_hv_grb(int x, int y, int kc) {
+    char get_hv_grb(int x, int y, int kc) const {
         // this makes weights green from whichever color (red blue) is at interpolation point
         //ratio of green:color above and below
         float hv1 = 2 * nraw[nro(y - 1, x)][1] /
@@ -150,12 +150,25 @@ struct DHT {
         // if H is larger than V: 4
         // if V in much larger than H: 3
         // if V is larger than H: 2
-        char d = dh < dv ? (e > Tg() ? HORSH : HOR) : (e > Tg() ? VERSH : VER);
+        char d;
+        if (dh < dv) {
+            if (e > Tg()) {
+                d = HORSH;
+            } else {
+                d = HOR;
+            }
+        } else {
+            if (e > Tg()) {
+                d = VERSH;
+            } else {
+                d = VER;
+            }
+        }
         return d;
     }
 
     // pick horizontal/vertical at green pixels
-    int get_hv_rbg(int x, int y, int hc) {
+    char get_hv_rbg(int x, int y, int hc) const {
         // this makes weights for red/blue when green is at the interpolation point
         // ratio other_color:green above and below
         float hv1 = 2 * nraw[nro(y - 1, x)][hc ^ 2] /
@@ -191,12 +204,17 @@ struct DHT {
         // if H is larger than V: 4
         // if V in much larger than H: 3
         // if V is larger than H: 2
-        char d = dh < dv ? (e > Tg() ? HORSH : HOR) : (e > Tg() ? VERSH : VER);
+        char d;
+        if (dh < dv) {
+            d = e > Tg() ? HORSH : HOR;
+        } else {
+            d = e > Tg() ? VERSH : VER;
+        }
         return d;
     }
 
     // pick diagonal at red/blue pixel
-    int get_diag_grb(int x, int y, int kc) {
+    char get_diag_grb(int x, int y, int kc) const {
         // similar to hv but without extra width on kernel (only looks to nearest neighbor because green is already there)
         // happens after initial green interpolation step
         // ratio of green:color upper-left (hlu) and lower-right (hrd)
@@ -223,12 +241,17 @@ struct DHT {
         // if + is larger than -: 16
         // if - in much larger than +: 40
         // if - is larger than +: 32
-        char d = druld < dlurd ? (e > T() ? RULDSH : RULD) : (e > T() ? LURDSH : LURD);
+        char d;
+        if (druld < dlurd) {
+            d = e > T() ? RULDSH : RULD;
+        } else {
+            d = e > T() ? LURDSH : LURD;
+        }
         return d;
     }
 
     // pick diagonal at green pixel
-    int get_diag_rbg(int x, int y, int /* hc */) {
+    char get_diag_rbg(int x, int y, int /* hc */) const {
         // relative green difference center:UL/LR
         float dlurd = calc_dist(nraw[nro(y - 1, x - 1)][1] * nraw[nro(y + 1, x + 1)][1],
                                 nraw[nro(y, x)][1] * nraw[nro(y, x)][1]);
@@ -241,18 +264,23 @@ struct DHT {
         // if + is larger than -: 16
         // if - in much larger than +: 40
         // if - is larger than +: 32
-        char d = druld < dlurd ? (e > T() ? RULDSH : RULD) : (e > T() ? LURDSH : LURD);
+        char d;
+        if (druld < dlurd) {
+            d = e > T() ? RULDSH : RULD;
+        } else {
+            d = e > T() ? LURDSH : LURD;
+        }
         return d;
     }
 
     static inline float scale_over(float ec, float base) {
-        float s = base * .4;
+        float s = base * .4f;
         float o = ec - base;
         return base + sqrt(s * (o + s)) - s;
     }
 
     static inline float scale_under(float ec, float base) {
-        float s = base * .6;
+        float s = base * .6f;
         float o = base - ec;
         return base - sqrt(s * (o + s)) + s;
     }
@@ -261,25 +289,25 @@ struct DHT {
     DHT(pfs::Array2D *Xj, pfs::Array2D *Yj, pfs::Array2D *Zj); //SW base on pfs::Array
 
     // main executions steps
-    void make_hv_dirs();
+    void make_hv_dirs() const;
     void make_greens();
-    void make_diag_dirs();
+    void make_diag_dirs() const;
     void make_rb();
     void copy_to_image();
 
     // internal functions
-    void refine_hv_dirs(int i, int js);
-    void refine_ihv_dirs(int i);
-    void refine_idiag_dirs(int i);
-    void make_hv_dline(int i);
-    void make_diag_dline(int i);
+    void refine_hv_dirs(int i, int js) const;
+    void refine_ihv_dirs(int i) const;
+    void refine_idiag_dirs(int i) const;
+    void make_hv_dline(int i) const;
+    void make_diag_dline(int i) const;
     void make_gline(int i);
     void make_rbdiag(int i);
     void make_rbhv(int i);
 
 //  void hide_hots(); // thresholds don't make sense with arbitrary hdr scaling
 //  void restore_hots();
-    int COLOR(int i, int j);
+    int COLOR(int i, int j) const;
     pfs::Array2D *imgdata[3];
 };
 
@@ -317,7 +345,7 @@ typedef float float3[3];
 
 // cant use dcraw codes because image is cropped. this is reliable as long as r0 and g0 (see next functions)
 // are properly set
-int DHT::COLOR(int i, int j) {
+int DHT::COLOR(int i, int j) const {
     // is green
     if (j % 2 == ((g0 + i) % 2))
         return 1;
@@ -365,8 +393,9 @@ DHT::DHT(pfs::Array2D *Xj, pfs::Array2D *Yj, pfs::Array2D *Zj) {
     r0 = first_non_zero_row(Xj);
     nr_height = iheight + nr_topmargin * 2;
     nr_width = iwidth + nr_leftmargin * 2;
-    nraw = (float3 *) malloc(nr_height * nr_width * sizeof(float3));
-    ndir = (char *) calloc(nr_height * nr_width, 1);
+    unsigned long rsize = nr_height * nr_width;
+    nraw = (float3 *) malloc(rsize  * sizeof(float3));
+    ndir = (char *) calloc(rsize, 1);
     channel_maximum[0] = channel_maximum[1] = channel_maximum[2] = 0;
     channel_minimum[0] = (*imgdata[0])(0);
     channel_minimum[1] = (*imgdata[1])(0);
@@ -376,14 +405,14 @@ DHT::DHT(pfs::Array2D *Xj, pfs::Array2D *Yj, pfs::Array2D *Zj) {
         nraw[i][0] = nraw[i][1] = nraw[i][2] = FLOOR;
     // read in raw data and record min/max
     for (int i = 0; i < iheight; ++i) {
-        int col_cache[48];
+        int col_cache[24];
         // use a cache of indices for color for efficiency
-        for (int j = 0; j < 48; ++j) {
+        for (int j = 0; j < 24; ++j) {
             int l = COLOR(i, j);
             col_cache[j] = l;
         }
         for (int j = 0; j < iwidth; ++j) {
-            int l = col_cache[j % 48];
+            int l = col_cache[j % 24];
             float c = (*imgdata[l])(j, i) + FLOOR;
             if (c != 0) {
                 if (channel_maximum[l] < c)
@@ -394,10 +423,37 @@ DHT::DHT(pfs::Array2D *Xj, pfs::Array2D *Yj, pfs::Array2D *Zj) {
             }
         }
     }
+    // reflect values into margins
+    int rmargin = nr_leftmargin*2+iwidth-1;
+    for (int i = nr_topmargin; i < iheight + nr_topmargin; ++i) {
+        for (int j = 0; j < nr_leftmargin; ++j) {
+            // left margin
+            nraw[nro(i, j)][0] = nraw[nro(i, nr_leftmargin*2-j)][0];
+            nraw[nro(i, j)][1] = nraw[nro(i, nr_leftmargin*2-j)][1];
+            nraw[nro(i, j)][2] = nraw[nro(i, nr_leftmargin*2-j)][2];
+            // right margin
+            nraw[nro(i, rmargin-j)][0] = nraw[nro(i, j+iwidth-1)][0];
+            nraw[nro(i, rmargin-j)][1] = nraw[nro(i, j+iwidth-1)][1];
+            nraw[nro(i, rmargin-j)][2] = nraw[nro(i, j+iwidth-1)][2];
+        }
+    }
+    rmargin = nr_topmargin*2+iheight-1;
+    for (int i = 0; i < nr_topmargin; ++i) {
+        for (int j = 0; j < nr_width; ++j) {
+            // top margin
+            nraw[nro(i, j)][0] = nraw[nro(nr_topmargin*2-i, j)][0];
+            nraw[nro(i, j)][1] = nraw[nro(nr_topmargin*2-i, j)][1];
+            nraw[nro(i, j)][2] = nraw[nro(nr_topmargin*2-i, j)][2];
+            // bottom margin
+            nraw[nro(rmargin-i, j)][0] = nraw[nro(i+iheight-1, j)][0];
+            nraw[nro(rmargin-i, j)][1] = nraw[nro(i+iheight-1, j)][1];
+            nraw[nro(rmargin-i, j)][2] = nraw[nro(i+iheight-1, j)][2];
+        }
+    }
 }
 
 // step 1: add interpolation codes for orthogonal interpolation
-void DHT::make_hv_dirs() {
+void DHT::make_hv_dirs() const {
     // assigns values 2-5 to DHT::ndir
     for (int i = 0; i < iheight; ++i) {
         make_hv_dline(i);
@@ -415,7 +471,7 @@ void DHT::make_hv_dirs() {
 }
 
 // step 1a: encode directional gradients
-void DHT::make_hv_dline(int i) {
+void DHT::make_hv_dline(int i) const {
     int js = COLOR(i, 0) & 1;
     int kc = COLOR(i, js);
     /*
@@ -428,7 +484,7 @@ void DHT::make_hv_dline(int i) {
     for (int j = 0; j < iwidth; j++) {
         int x = j + nr_leftmargin;
         int y = i + nr_topmargin;
-        char d = 0;
+        char d;
         if ((j & 1) == js) {
             // red/blue pixel
             d = get_hv_grb(x, y, kc);
@@ -446,7 +502,7 @@ void DHT::make_hv_dline(int i) {
 }
 
 // step 1b,c
-void DHT::refine_hv_dirs(int i, int js) {
+void DHT::refine_hv_dirs(int i, int js) const {
     for (int j = js; j < iwidth; j += 2) {
         int x = j + nr_leftmargin;
         int y = i + nr_topmargin;
@@ -482,7 +538,7 @@ void DHT::refine_hv_dirs(int i, int js) {
 }
 
 // step 1d: same as above but only refines if all neighbors are different
-void DHT::refine_ihv_dirs(int i) {
+void DHT::refine_ihv_dirs(int i) const {
     for (int j = 0; j < iwidth; j++) {
         int x = j + nr_leftmargin;
         int y = i + nr_topmargin;
@@ -581,7 +637,7 @@ void DHT::make_gline(int i) {
 }
 
 // step 3: add interpolation codes for diagonal interpolation
-void DHT::make_diag_dirs() {
+void DHT::make_diag_dirs() const {
     for (int i = 0; i < iheight; ++i) {
         make_diag_dline(i);
     }
@@ -592,7 +648,7 @@ void DHT::make_diag_dirs() {
 }
 
 // step 3a:
-void DHT::make_diag_dline(int i) {
+void DHT::make_diag_dline(int i) const {
     int js = COLOR(i, 0) & 1;
     int kc = COLOR(i, js);
     /*
@@ -605,7 +661,7 @@ void DHT::make_diag_dline(int i) {
     for (int j = 0; j < iwidth; j++) {
         int x = j + nr_leftmargin;
         int y = i + nr_topmargin;
-        char d = 0;
+        char d;
         if ((j & 1) == js) {
             // red/blue pixel
             d = get_diag_grb(x, y, kc);
@@ -624,7 +680,7 @@ void DHT::make_diag_dline(int i) {
 }
 
 // step 3b:
-void DHT::refine_idiag_dirs(int i) {
+void DHT::refine_idiag_dirs(int i) const {
     for (int j = 0; j < iwidth; j++) {
         int x = j + nr_leftmargin;
         int y = i + nr_topmargin;
@@ -676,7 +732,7 @@ void DHT::make_rb() {
 /*
  * interpolation of reds and blues.
  *
- * first the missing colors are interpolated, along the diagonal directions from
+ * first the missing colors are interpolated, along the diagonal directions
  * from which the known colors are found, then the situation is reduced to the way in which
  * interpolated green.
  */
@@ -835,7 +891,7 @@ void DHT::make_rbhv(int i) {
  */
 // step 5
 void DHT::copy_to_image() {
-    int pidx;
+    unsigned long pidx;
     for (int i = 0; i < iheight; ++i)
         for (int j = 0; j < iwidth; ++j) {
             pidx = nro(i + nr_topmargin, j + nr_leftmargin);
