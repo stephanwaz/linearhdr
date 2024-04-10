@@ -177,6 +177,7 @@ void linearhdr_main(int argc, char *argv[]) {
                             {0.0, 1.0, 0.0},
                             {0.0, 0.0, 1.0}};
     float vlambda[3] = {0.333333, 0.333334, 0.333333};
+    float wsp[3] = {1, 1, 1};
     float rgbcal[3] = {1.0, 1.0, 1.0};
     float efc[3][3] = {{0.0, 0.0, 0.0},
                        {0.0, 0.0, 0.0},
@@ -318,7 +319,6 @@ void linearhdr_main(int argc, char *argv[]) {
     float gmax = 1e-30;
     bool oorange = true;
     float pmax;
-    float calfac;
 
     // collected exposures
     ExposureList imgsR;
@@ -357,6 +357,10 @@ void linearhdr_main(int argc, char *argv[]) {
                     if ( comment.substr(begin, equal - begin) == "LuminanceRGB"){
                         istringstream ss(comment.substr(equal+1, comment.size()));
                         ss >> vlambda[0] >> vlambda[1] >> vlambda[2];
+                    }
+                    if ( comment.substr(begin, equal - begin) == "WhiteSaturation"){
+                        istringstream ss(comment.substr(equal+1, comment.size()));
+                        ss >> wsp[0] >> wsp[1] >> wsp[2];
                     }
                     header  << cprefix << comment.substr(begin, comment.size()) << endl;
                 }
@@ -441,10 +445,12 @@ void linearhdr_main(int argc, char *argv[]) {
         imgsG.push_back(eG);
         imgsB.push_back(eB);
 
-        calfac = 0.0;
-        for (int m = 0; m < 3; m++)
-            calfac += vlambda[m] * rgbcal[m] * (rgb_corr[m][0] + rgb_corr[m][1] + rgb_corr[m][2]);
-        fmax = info.factor * (1 - opt_saturation_offset_perc) * calfac;
+        float calcfac = 0.0;
+        for (int m = 0; m < 3; m++) {
+            calcfac += vlambda[m] * rgbcal[m] * (rgb_corr[m][0] + rgb_corr[m][1] + rgb_corr[m][2]);
+        }
+
+        fmax = info.factor * (1 - opt_saturation_offset_perc) * calcfac;
         fmin = fmax * opt_black_offset_perc;
         gmax = max(gmax, fmax);
         gmin = min(gmin, fmin);
@@ -488,8 +494,10 @@ void linearhdr_main(int argc, char *argv[]) {
     const ExposureList *exposures[] = {&imgsR, &imgsG, &imgsB};
 
     VERBOSE_STR << "merging hdr..." << endl;
-    auto [saturated_pixels, under_pixels] = linear_response_slim(RGB_out, exposures, opt_saturation_offset_perc,
-                         opt_black_offset_perc, opt_scale, rgb_corr,
+    long saturated_pixels, under_pixels;
+
+    tie(saturated_pixels, under_pixels) = linear_response_slim(RGB_out, exposures, opt_saturation_offset_perc,
+                         opt_black_offset_perc, opt_scale, rgb_corr, wsp,
                          oor_high, oor_low, demosaic);
 
     if (under_pixels > 0) {

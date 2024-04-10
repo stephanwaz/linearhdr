@@ -96,12 +96,12 @@ float get_exposure_compensation(const Exposure &ex) {
 float get_weight(const Exposure &ex, const double x, const double s, int wfi){
     switch (wfi){
         case 1: // 'h' simple hat function
-            return 1.4918*std::exp(-.1 * (1/x + 1/(1-x)));
+            return std::exp(-0.01/x - 0.1/(1-x));
         case 3: // 's' poisson noise estimation weighting (weight by exposure, easing out of range pixels)
             return ex.exposure_time  / (1+ std::exp(-(0.88-x-s)/0.012));
         default: // 'p' poisson noise estimation weighting
             // also used by 't' only longest exposure is used
-            return ex.exposure_time;
+            return ex.exposure_time ;
 
     }
 }
@@ -132,7 +132,7 @@ void merge_worst(pfs::Array2D *out[],
     bool under_exp;
     float best_exp = 0.0;
     int best_exp_i = -1;
-    int N = imgs[0]->size();
+    unsigned long N = imgs[0]->size();
     float w[N]; // stores the weight for each frame
     float X[3][N]; // stores the value for each frame
     fill(w, w + N, 1.0);
@@ -146,9 +146,6 @@ void merge_worst(pfs::Array2D *out[],
             w[n] = min(w[n], get_weight((*imgs[cc])[n], (*(*imgs[cc])[n].yi)(k), opt_saturation_offset, wfi));
             saturated_exp |= (*(*imgs[cc])[n].yi)(k) >= 1 - opt_saturation_offset;
             under_exp  |= (*(*imgs[cc])[n].yi)(k) <= opt_black_offset;
-            all_under &= under_exp;
-            all_over &= saturated_exp;
-
         }
         if (!(saturated_exp || under_exp)) {
             div += w[n];
@@ -160,12 +157,14 @@ void merge_worst(pfs::Array2D *out[],
                 best_exp_i = n;
             }
         }
-        // just in case (can end up with a zero weight when finding worst color channel)
-        // but this should mean it is under-exposed
-        if (div <= 0 && !all_over)
-            all_under = true;
-
+        all_under &= under_exp;
+        all_over &= saturated_exp;
     }
+    // just in case (can end up with a zero weight when finding worst color channel)
+    // but this should mean it is under-exposed
+    if (div <= 0 && !all_over)
+        all_under = true;
+
     if (wfi == 2 && best_exp_i > -1) {
         div = 1;
         for (int cc = 0; cc < 3; cc++)
@@ -205,7 +204,7 @@ void merge_each(pfs::Array2D *out[],
                     best_exp[cc] = w[cc][n];
                     div[cc] = 1;
                     (*out[cc])(k) = X[cc][n];
-                } else {
+                } else if (wfi != 2) {
                     div[cc] += w[cc][n];
                     (*out[cc])(k) += X[cc][n] * w[cc][n];
                 }
@@ -245,7 +244,7 @@ void merge_bayer(pfs::Array2D *out[],
                 best_exp = w[n];
                 div = 1;
                 (*out[cc])(k) = X[n];
-            } else {
+            } else if (wfi != 2) {
                 div += w[n];
                 (*out[cc])(k) += X[n] * w[n];
             }
@@ -315,7 +314,7 @@ void merge_bayer_worst(pfs::Array2D *out[],
                 best_exp = w[n];
                 div[cc] = 1;
                 (*out[cc])(k) = X[n];
-            } else {
+            }  else if (wfi != 2)  {
                 div[cc] += w[n];
                 (*out[cc])(k) += X[n] * w[n];
             }
@@ -504,7 +503,7 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
 
     // demosaic after merge
     if (demosaic){
-        dht_interpolate(out[0], out[1], out[2]);
+        dht_interpolate(out);
         // in this case data not yet mapped to output colorspace, do this now
         for (int j = 0; j < NP; j++)
             apply_color_transform(j, out, rgb_corr);

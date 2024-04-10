@@ -136,9 +136,6 @@ void merge_worst(pfs::Array2D *out[],
             w[n] = min(w[n], get_weight((*imgs[cc])[n], (*(*imgs[cc])[n].yi)(k), opt_saturation_offset, wfi));
             saturated_exp |= (*(*imgs[cc])[n].yi)(k) >= 1 - opt_saturation_offset;
             under_exp  |= (*(*imgs[cc])[n].yi)(k) <= opt_black_offset;
-            all_under &= under_exp;
-            all_over &= saturated_exp;
-
         }
         if (!(saturated_exp || under_exp)) {
             div += w[n];
@@ -150,12 +147,14 @@ void merge_worst(pfs::Array2D *out[],
                 best_exp_i = n;
             }
         }
-        // just in case (can end up with a zero weight when finding worst color channel)
-        // but this should mean it is under-exposed
-        if (div <= 0 && !all_over)
-            all_under = true;
-
+        all_under &= under_exp;
+        all_over &= saturated_exp;
     }
+    // just in case (can end up with a zero weight when finding worst color channel)
+    // but this should mean it is under-exposed
+    if (div <= 0 && !all_over)
+        all_under = true;
+
     if (wfi == 2 && best_exp_i > -1) {
         div = 1;
         for (int cc = 0; cc < 3; cc++)
@@ -224,7 +223,7 @@ void merge_bayer_worst(pfs::Array2D *out[],
                 best_exp = w[n];
                 div[cc] = 1;
                 (*out[cc])(k) = X[n];
-            } else {
+            }  else if (wfi != 2)  {
                 div[cc] += w[n];
                 (*out[cc])(k) += X[n] * w[n];
             }
@@ -305,12 +304,12 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
             int wc;
             for (int cc = ccf; cc < 3; cc += cinc) {
                 wc = (weightworst && !isbayer) ? 3 : cc;
-                if (all_under[wc]) {
-                    (*out[cc])(k) = -2;
-                    under_pixels++;
-                } else if (all_over[wc]) {
+                if (all_over[wc]) {
                     (*out[cc])(k) = -1;
                     saturated_pixels++;
+                } else if (all_under[wc]) {
+                    (*out[cc])(k) = -2;
+                    under_pixels++;
                 } else {
                     (*out[cc])(k) = (*out[cc])(k) / div[wc];
                     // in this case directly store each channel max
@@ -407,7 +406,7 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
 
     // demosaic after merge
     if (demosaic){
-        dht_interpolate(out[0], out[1], out[2]);
+        dht_interpolate(out);
         // in this case data not yet mapped to output colorspace, do this now
         for (int j = 0; j < NP; j++)
             apply_color_transform(j, out, rgb_corr);

@@ -105,11 +105,13 @@ std::tuple<long, long> linear_response_slim(pfs::Array2D *out[],
                                     const float opt_black_offset,
                                     const float scale,
                                     const float rgb_corr[3][3],
+                                    const float wsp[3], // white saturation point in target color space of raw values
                                     const float oor_high,
                                     float oor_low,
                                     const bool demosaic);
 
-void dht_interpolate(pfs::Array2D *Xj, pfs::Array2D *Yj, pfs::Array2D *Zj);
+
+void dht_interpolate(pfs::Array2D *imgdata[]);
 
 int first_non_zero_row(pfs::Array2D *X);
 

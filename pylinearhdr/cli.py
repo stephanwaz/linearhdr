@@ -926,8 +926,10 @@ def getimgdata(ctx, test, tc=None, outf=None, stdout=False, zeromode=0, lum=Fals
 @click.option("-oxyzrgb", default=None, help="alternative output as xyz->rgb matrix (overrides -outp)")
 @click.option("-rgbrgb", default=None, help="alternative input as rgb->rgb matrix (overrides -inp and -outp)")
 @click.option("--verbose/--no-verbose", default=False, help="print color transforn matrices to stderr")
+@click.option("-maxv", type=float, help="cap max val, only applies to RGB or XYZ output")
+@click.option("-minv", type=float, help="cap minv val, only applies to RGB or XYZ output")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=None, lab=None, verbose=True, **kwargs):
+def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=None, lab=None, verbose=True, maxv=None, minv=None, **kwargs):
     """apply color primary conversion
     """
     if lab is not None:
@@ -944,6 +946,11 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
             shape = rgb.shape
             rgb = cl.xyz_2_lab(rgb.reshape(3, -1), lab)
             rgb = rgb.reshape(shape)
+        elif outp not in ["yxy", "yuv"]:
+            if maxv is not None:
+                rgb = np.minimum(maxv, rgb)
+            if minv is not None:
+                rgb = np.maximum(minv, rgb)
         io.array2hdr(rgb, None, header=outheader, clean=True)
     else:
         rgb2rgb, _ = pl.prep_color_transform(inp, outp, xyzrgb=xyzrgb, rgbrgb=rgbrgb, oxyzrgb=oxyzrgb, verbose=verbose)
@@ -974,6 +981,11 @@ def color(ctx, img, inp='rad', outp='srgb', xyzrgb=None, oxyzrgb=None, rgbrgb=No
             u = 4 * rgb[:, 0] / d
             v = 9 * rgb[:, 1] / d
             rgb = np.stack((rgb[:, 1], u, v)).T
+        else:
+            if maxv is not None:
+                rgb = np.minimum(maxv, rgb)
+            if minv is not None:
+                rgb = np.maximum(minv, rgb)
         for r in rgb:
             print(*r)
 

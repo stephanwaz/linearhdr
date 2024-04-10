@@ -263,15 +263,19 @@ def cam_color_mtx(xyzcam, cs='rad', cscale=None):
     rgb_cam = xyz_cam @ rgb_xyz
     # invert to camRGB->rgb
     cam_rgb = np.linalg.inv(rgb_cam)
+    wps = np.sum(rgb_cam, axis=1)
+    wps /= np.max(wps)
     cam_rgbs = " ".join([f"{i:.08f}" for i in cam_rgb.ravel()])
 
     ps = " ".join([f"{i:.04f}" for i in cs[0]])
     ws = " ".join([f"{i:.04f}" for i in cs[1]])
     ls = " ".join([f"{i:.08f}" for i in rgb_xyz[1]])
+    wps = " ".join([f"{i:.08f}" for i in wps])
     header = [f"# Camera2RGB= {cam_rgbs}",
               f"# TargetPrimaries= {ps}",
               f"# TargetWhitePoint= {ws}",
-              f"# LuminanceRGB= {ls}"]
+              f"# LuminanceRGB= {ls}",
+              f"# WhiteSaturation= {wps}"]
     if cscale is not None:
         ccal = " ".join([str(i) for i in cscale])
         header.append(f"# RGBcalibration= {ccal}")

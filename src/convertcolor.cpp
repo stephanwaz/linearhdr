@@ -182,7 +182,7 @@ void ConvertColor( int argc, char* argv[] ) {
         int g0 = first_non_zero(Y);
         int r0 = first_non_zero_row(X);
         VERBOSE_STR << "go: " << g0 << " r0: " << r0 << std::endl;
-        dht_interpolate(X, Y, Z);
+        dht_interpolate(xyz);
     }
 
     if (usemtx) {
