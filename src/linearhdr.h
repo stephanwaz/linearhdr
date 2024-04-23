@@ -108,7 +108,10 @@ std::tuple<long, long> linear_response_slim(pfs::Array2D *out[],
                                     const float wsp[3], // white saturation point in target color space of raw values
                                     const float oor_high,
                                     float oor_low,
-                                    const bool demosaic);
+                                    bool isbayer,
+                                    const bool demosaic,
+                                    bool mergeeach = false,
+                                    bool usebest = false);
 
 
 void dht_interpolate(pfs::Array2D *imgdata[]);

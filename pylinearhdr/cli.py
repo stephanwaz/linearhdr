@@ -244,10 +244,9 @@ def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scal
     if executable == "linearhdr":
         needs_full = "-wf" in hdropts or "-f" in hdropts
         needs_ext = "--we" in hdropts or ("-w" in hdropts and not needs_full)
-        maybe_slim = rawgrid or not interpfirst
         if needs_ext:
             executable = "linearhdr_full"
-        elif maybe_slim and not needs_full:
+        elif not needs_full:
             executable = "linearhdr_slim"
     if half:
         interpfirst = True
@@ -265,6 +264,8 @@ def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scal
             hdropts += " -B"
     elif not interpfirst:
         hdropts += " -D"
+    if executable == "linearhdr_slim" and interpfirst and not rawgrid:
+        hdropts += " -B"
     outf = sys.stdout
     outfn = "<makelist.txt>"
     if listonly:

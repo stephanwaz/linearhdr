@@ -147,9 +147,7 @@ struct DHT {
                 calc_dist(nraw[k(y, x)][kc] * nraw[k(y, x)][kc],
                           (nraw[k(y - 2, x)][kc] * nraw[k(y + 2, x)][kc]));
         // fourth power
-        kv *= kv;
-        kv *= kv;
-        kv *= kv;
+        kv *= kv * kv * kv;
         //kv * relative green difference between farther and closer greens above and below
         float dv = kv * calc_dist(nraw[k(y - 3, x)][1] * nraw[k(y + 3, x)][1],
                                   nraw[k(y - 1, x)][1] * nraw[k(y + 1, x)][1]);
@@ -164,9 +162,7 @@ struct DHT {
                 calc_dist(nraw[k(y, x)][kc] * nraw[k(y, x)][kc],
                           (nraw[k(y, x - 2)][kc] * nraw[k(y, x + 2)][kc]));
         // fourth power
-        kh *= kh;
-        kh *= kh;
-        kh *= kh;
+        kh *= kh * kh * kh;
         //kh * relative green difference between farther and closer greens left and right
         float dh = kh * calc_dist(nraw[k(y, x - 3)][1] * nraw[k(y, x + 3)][1],
                                   nraw[k(y, x - 1)][1] * nraw[k(y, x + 1)][1]);
@@ -206,9 +202,7 @@ struct DHT {
                                                    (nraw[k(y - 2, x)][1] * nraw[k(y + 2, x)][1]));
 
         // fourth power
-        kv *= kv;
-        kv *= kv;
-        kv *= kv;
+        kv *= kv * kv * kv;
         //kv * relative other color difference between farther and closer other color above and below
         float dv = kv * calc_dist(nraw[k(y - 3, x)][hc ^ 2] * nraw[k(y + 3, x)][hc ^ 2],
                                   nraw[k(y - 1, x)][hc ^ 2] * nraw[k(y + 1, x)][hc ^ 2]);
@@ -218,9 +212,7 @@ struct DHT {
         float hh2 = 2 * nraw[k(y, x + 1)][hc] / (nraw[k(y, x + 2)][1] + nraw[k(y, x)][1]);
         float kh = calc_dist(hh1, hh2) * calc_dist(nraw[k(y, x)][1] * nraw[k(y, x)][1],
                                                    (nraw[k(y, x - 2)][1] * nraw[k(y, x + 2)][1]));
-        kh *= kh;
-        kh *= kh;
-        kh *= kh;
+        kh *= kh * kh * kh;
         //kv * relative other color difference between farther and closer other color left and right
         float dh = kh * calc_dist(nraw[k(y, x - 3)][hc] * nraw[k(y, x + 3)][hc],
                                   nraw[k(y, x - 1)][hc] * nraw[k(y, x + 1)][hc]);
@@ -300,13 +292,13 @@ struct DHT {
     }
 
     static inline float scale_over(float ec, float base) {
-        float s = base * .4f;
+        float s = base * .001f;
         float o = ec - base;
         return base + sqrt(s * (o + s)) - s;
     }
 
     static inline float scale_under(float ec, float base) {
-        float s = base * .6f;
+        float s = base * .001f;
         float o = base - ec;
         return base - sqrt(s * (o + s)) + s;
     }
@@ -375,7 +367,8 @@ struct DHT {
  * * you have to make sure that you don't get a 0 when rounding, otherwise you'll have a problem when
  * interpreting blue and red colors.
  *
- * SW Note: with HDR input everything is assumed float, and values are allowed to go to zero
+ * SW Note: with HDR input everything is assumed float, and the floor is set to a very small value to maintain
+ * relative difference across magnitude
  *
  */
 
@@ -620,8 +613,8 @@ void DHT::make_gline(int i) {
         float min, max;
         min = MIN(nraw[k(y + dy, x + dx)][1], nraw[k(y + dy2, x + dx2)][1]);
         max = MAX(nraw[k(y + dy, x + dx)][1], nraw[k(y + dy2, x + dx2)][1]);
-        min /= 1.2f;
-        max *= 1.2f;
+//        min /= 1.2f;
+//        max *= 1.2f;
         // if value is well outsides bounds of two adjacent green pixels, scale back towards center
         if (eg < min)
             eg = scale_under(eg, min);
@@ -856,10 +849,10 @@ void DHT::make_rbhv(int i) {
         float min_b, max_b;
         min_b = MIN(nraw[k(y + dy, x + dx)][2], nraw[k(y + dy2, x + dx2)][2]);
         max_b = MAX(nraw[k(y + dy, x + dx)][2], nraw[k(y + dy2, x + dx2)][2]);
-        min_r /= 1.2f;
-        max_r *= 1.2f;
-        min_b /= 1.2f;
-        max_b *= 1.2f;
+//        min_r /= 1.2f;
+//        max_r *= 1.2f;
+//        min_b /= 1.2f;
+//        max_b *= 1.2f;
 
         if (eg_r < min_r)
             eg_r = scale_under(eg_r, min_r);

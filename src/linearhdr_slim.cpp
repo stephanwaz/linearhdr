@@ -72,6 +72,14 @@ inline float min(float a, float b) {
     return (a < b) ? a : b;
 }
 
+inline float max3(float a, float b, float c) {
+    return max(a, max(b, c));
+}
+
+inline float min3(float a, float b, float c) {
+    return min(a, min(b, c));
+}
+
 // based on the first green column (0 or 1) and first red row (0 or 1) return color at pixel coordinate
 int grid_color(int i, int j, int g0, int r0) {
     // is green
@@ -90,7 +98,7 @@ float get_exposure_compensation(const Exposure &ex) {
 }
 
 float get_weight(const double x, const double s, const double b){
-    return std::exp(-b/x - 0.1/(1-s-x)) + 1e-9;
+    return std::exp(-b/x - 0.01/(1-s-x)) + 1e-9;
 }
 
 void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3]) {
@@ -105,13 +113,14 @@ void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3
 
 // merge a mosaic image considering adjacent pixels
 // helps to detect sensor blooming
-char merge(pfs::Array2D *out[],
+unsigned char merge(pfs::Array2D *out[],
            const ExposureList *imgs[],
            int i, int j, int r0, int g0,
            const float opt_black_offset,
            const float opt_saturation_offset,
            const float scale,
-           const float wsp[3]) {
+           const float wsp[3],
+           const bool best = false) {
     int N = imgs[0]->size();
     int width = out[0]->getCols();
     int height = out[0]->getRows();
@@ -149,6 +158,8 @@ char merge(pfs::Array2D *out[],
     float low = 1e30; // min value (including oor)
     float ec;
     float pvalue;
+    float bw = -1;
+    float bv = 0.0;
     for (int n = 0; n < N; n++) {
         ec = get_exposure_compensation((*imgs[cc])[n]);
         saturation_a = saturation_b = 0.0;
@@ -167,7 +178,7 @@ char merge(pfs::Array2D *out[],
         under_exp = under <= opt_black_offset;
 
         pvalue = (*(*imgs[cc])[n].yi)(k);
-        high = max(high, pvalue / ec);
+        high = max(high, min(pvalue, wsp[cc]) / ec);
         low = min(low, pvalue / ec);
         // if other channels are out of range, cap to white point of destination to avoid (likely) magenta highlights
         if (saturated_exp)
@@ -183,6 +194,13 @@ char merge(pfs::Array2D *out[],
                        get_weight(under, opt_saturation_offset, opt_black_offset));
             div += w  * ec;
             (*out[cc])(k) += w * pvalue;
+// nullify poisson noise weighting
+//            div += w;
+//            (*out[cc])(k) += w * pvalue / ec;
+            if (w * ec > bw) {
+                bw = w * ec;
+                bv = pvalue / ec;
+            }
         }
     }
     // after looping over all frames, now we can
@@ -190,11 +208,160 @@ char merge(pfs::Array2D *out[],
     if (all_under) {
         (*out[cc])(k) = low;
     } else if (all_over) {
-        (*out[cc])(k) = min(high, wsp[cc] / ec);
+        (*out[cc])(k) = high;
+    } else if (best) {
+        (*out[cc])(k) = scale * bv;
     } else {
         (*out[cc])(k) = scale * (*out[cc])(k) / div;
     }
     return all_under + all_over * 2;
+}
+
+// merge an RGB demosaiced sequence, weights by worst channel
+unsigned char merge_rgb(pfs::Array2D *out[],
+                    const ExposureList *imgs[],
+                    int k,
+                    const float opt_black_offset,
+                    const float opt_saturation_offset,
+                    const float scale,
+                    const float wsp[3],
+                    const bool best = false) {
+    int N = imgs[0]->size();
+    float w; // stores the weight for each frame
+    float div = 0.0;
+    for (int cc = 0; cc < 3; cc++) //make sure output is clear
+        (*out[cc])(k) = 0;
+    // loop over individual frames, calculating weights
+    bool all_under = true;
+    bool all_over = true;
+    bool saturated_exp;
+    bool under_exp;
+    float saturation; // highest raw value among 3 colors
+    float under; // lowest raw value among 3 colors
+    float high[3] = {0.0, 0.0, 0.0}; // max value (including oor)
+    float low[3] = {1e30, 1e30, 1e30}; // min value (including oor)
+    float ec;
+    float pvalue[3];
+    float bw = -1;
+    float bv[3] = {0.0, 0.0, 0.0};
+    for (int n = 0; n < N; n++) {
+        ec = get_exposure_compensation((*imgs[0])[n]);
+        saturation = max3((*(*imgs[0])[n].yi)(k), (*(*imgs[1])[n].yi)(k), (*(*imgs[2])[n].yi)(k));
+        under = min3((*(*imgs[0])[n].yi)(k), (*(*imgs[1])[n].yi)(k), (*(*imgs[2])[n].yi)(k));;
+
+        saturated_exp = saturation >= 1 - opt_saturation_offset;
+        under_exp = under <= opt_black_offset;
+
+        all_under &= under_exp;
+        all_over &= saturated_exp;
+
+        // use worst weight from all channels
+        w = min(get_weight(saturation, opt_saturation_offset, opt_black_offset),
+                get_weight(under, opt_saturation_offset, opt_black_offset));
+        if (!(saturated_exp || under_exp)) {
+            // no noise weighting: div += w
+            div += w * ec;
+            if (w * ec > bw) {
+                bw = w * ec;
+                bv[0] = (*(*imgs[0])[n].yi)(k) / ec;
+                bv[1] = (*(*imgs[1])[n].yi)(k) / ec;
+                bv[2] = (*(*imgs[2])[n].yi)(k) / ec;
+            }
+        }
+
+        for (int cc = 0; cc < 3; cc++) {
+            pvalue[cc] = (*(*imgs[cc])[n].yi)(k);
+            high[cc] = max(high[cc], min(pvalue[cc], wsp[cc])  / ec);
+            low[cc] = min(low[cc], pvalue[cc] / ec);
+            // if other channels are out of range, cap to white point of destination to avoid (likely) magenta highlights
+            if (saturated_exp && pvalue[cc] < 1 - opt_saturation_offset)
+                pvalue[cc] = min(pvalue[cc], wsp[cc]);
+            if (!(saturated_exp || under_exp)) {
+                // no noise weighting: (*out[cc])(k) += w * pvalue[cc] / ec;
+                (*out[cc])(k) += w * pvalue[cc];
+            }
+        }
+    }
+    // if all frames are either over or under and none are in range (shouldn't happen with good exposure sequence
+    // in camera raw space unless very peaky spectrum
+    if (div == 0)
+        all_over = true;
+
+    // after looping over all frames, now we can
+    // correct oor values and correctly weight output for in range
+    for (int cc = 0; cc < 3; cc++) {
+        if (all_under) {
+            (*out[cc])(k) = low[cc];
+        } else if (all_over) {
+            (*out[cc])(k) = high[cc];
+        } else if (best) {
+            (*out[cc])(k) = scale * bv[cc];
+        } else {
+            (*out[cc])(k) = scale * (*out[cc])(k) / div;
+        }
+    }
+    return all_under + all_over * 2;
+}
+
+// merge a single pixel channel (can be bayer or not)
+// does not track saturation or under flow, should only be used experimentally
+unsigned char merge_independent(pfs::Array2D *out[],
+                    const ExposureList *imgs[],
+                    int k, int cc,
+                    const float opt_black_offset,
+                    const float opt_saturation_offset,
+                    const float scale,
+                    const float wsp,
+                    const bool best = false) {
+    int N = imgs[0]->size();
+    float w; // stores the weight for each frame
+    float div = 0.0;
+    (*out[cc])(k) = 0; // reset pixel
+    // loop over individual frames, calculating weights
+    bool all_under = true;
+    bool all_over = true;
+    bool saturated_exp;
+    bool under_exp;
+    float high = 0.0; // max value (including oor)
+    float low = 1e30; // min value (including oor)
+    float ec;
+    float pvalue;
+    float bw = -1;
+    float bv = 0.0;
+    for (int n = 0; n < N; n++) {
+        ec = get_exposure_compensation((*imgs[cc])[n]);
+        pvalue = (*(*imgs[cc])[n].yi)(k);
+        saturated_exp = pvalue >= 1 - opt_saturation_offset;
+        under_exp = pvalue <= opt_black_offset;
+
+        high = max(high, min(pvalue, wsp) / ec);
+        low = min(low, pvalue / ec);
+
+        all_under &= under_exp;
+        all_over &= saturated_exp;
+
+        if (!(saturated_exp || under_exp)) {
+            w = get_weight(pvalue, opt_saturation_offset, opt_black_offset);
+            div += w  * ec;
+            (*out[cc])(k) += w * pvalue;
+            if (w * ec > bw) {
+                bw = w * ec;
+                bv = pvalue / ec;
+            }
+        }
+    }
+    // after looping over all frames, now we can
+    // correct oor values and correctly weight output for in range
+    if (all_under) {
+        (*out[cc])(k) = low;
+    } else if (all_over) {
+        (*out[cc])(k) = high;
+    } else if (best) {
+        (*out[cc])(k) = scale * bv;
+    } else {
+        (*out[cc])(k) = scale * (*out[cc])(k) / div;
+    }
+    return 0;
 }
 
 std::tuple<long, long> linear_response_slim(pfs::Array2D *out[],
@@ -206,12 +373,14 @@ std::tuple<long, long> linear_response_slim(pfs::Array2D *out[],
                                        const float wsp[3],
                                        const float oor_high,
                                        float oor_low,
-                                       const bool demosaic){
+                                       bool isbayer,
+                                       const bool demosaic,
+                                       bool mergeeach,
+                                       bool usebest){
 
-    // establish bayer grid coordinates
-    int g0 = first_non_zero((*imgs[1])[0].yi);
-    int r0 = first_non_zero_row((*imgs[0])[0].yi);
-    VERBOSE_STR << "1st green column: " << g0 << " 1st red row: " << r0 << std::endl;
+    // governs primary merging, do we merge all color channels, or according to CFA
+    isbayer = isbayer or demosaic;
+
     // frame size
     int width = out[0]->getCols();
     int height = out[0]->getRows();
@@ -223,20 +392,62 @@ std::tuple<long, long> linear_response_slim(pfs::Array2D *out[],
     int under_pixels = 0;
 
     int k; // used to ravel i,j pixel coordinates
-    char *oor = (char *) malloc(NP  * sizeof(char)); // track out of range pixels for masking
-    // loop over image
-    for (int i = 0; i < height; i++) {
-        for (int j = 0; j < width; j++) {
-            k = j + i * width;
-            oor[k] = merge(out, imgs, i, j, r0, g0, opt_black_offset, opt_saturation_offset, scale, wsp);
-            // track out of range
-            saturated_pixels += oor[k] == 2;
-            under_pixels += oor[k] == 1;
+    auto *oor = (unsigned char *) malloc(NP  * sizeof(unsigned char)); // track out of range pixels for masking
+
+    // establish bayer grid coordinates
+    int g0 = first_non_zero((*imgs[1])[0].yi);
+    int r0 = first_non_zero_row((*imgs[0])[0].yi);
+    if (mergeeach) {
+        int ccf = 0; // first color index in loop, adjusted at each pixel when isbayer
+        int cinc = isbayer ? 3: 1; // whether color loop will increment through all colors or only first
+        for (int i = 0; i < height; i++)
+            for (int j = 0; j < width; j++) {
+                k = j + i * width;
+                if (isbayer)
+                    ccf = grid_color(i, j, g0, r0);
+                for (int cc = ccf; cc < 3; cc += cinc) {
+                    oor[k] = merge_independent(out, imgs, k, cc, opt_black_offset, opt_saturation_offset, scale, wsp[cc], usebest);
+                }
+            }
+    } else {
+        if (isbayer) {
+            VERBOSE_STR << "1st green column: " << g0 << " 1st red row: " << r0 << std::endl;
+            // loop over bayer image
+            for (int i = 0; i < height; i++)
+                for (int j = 0; j < width; j++) {
+                    k = j + i * width;
+                    oor[k] = merge(out, imgs, i, j, r0, g0, opt_black_offset, opt_saturation_offset, scale, wsp, usebest);
+                    // track out of range
+                    saturated_pixels += oor[k] == 2;
+                    under_pixels += oor[k] == 1;
+                }
+        } else {
+            //loop over rgb image
+            for (int i = 0; i < height; i++)
+                for (int j = 0; j < width; j++) {
+                    k = j + i * width;
+                    oor[k] = merge_rgb(out, imgs, k, opt_black_offset, opt_saturation_offset, scale, wsp, usebest);
+                    // track out of range
+                    saturated_pixels += oor[k] == 2;
+                    under_pixels += oor[k] == 1;
+                }
         }
     }
-    // demosaic after merge
-    if (demosaic){
-        dht_interpolate(out);
+    if (isbayer && !demosaic) {
+        int cc;
+        // fill in out of range pixels
+        for (int i = 0; i < height; i++)
+            for (int j = 0; j < width; j++) {
+                k = j + i * width;
+                cc = grid_color(i, j, g0, r0);
+                if (oor[j] == 2 && oor_high >= 0)
+                    (*out[cc])(k) = oor_high;
+                if (oor[j] == 1 && oor_low >= 0)
+                    (*out[cc])(k) = oor_low;
+            }
+    } else {
+        if (demosaic) // demosaic after merge
+            dht_interpolate(out);
         // in this case data not yet mapped to output colorspace, do this now
         for (int j = 0; j < NP; j++) {
             apply_color_transform(j, out, rgb_corr);
@@ -249,18 +460,6 @@ std::tuple<long, long> linear_response_slim(pfs::Array2D *out[],
             }
 
         }
-    } else {
-        int cc;
-        // fill in out of range pixels
-        for (int i = 0; i < height; i++)
-            for (int j = 0; j < width; j++) {
-                k = j + i * width;
-                cc = grid_color(i, j, g0, r0);
-                if (oor[j] == 2 && oor_high >= 0)
-                    (*out[cc])(k) = oor_high;
-                if (oor[j] == 1 && oor_low >= 0)
-                    (*out[cc])(k) = oor_low;
-            }
     }
     return std::make_tuple(saturated_pixels, under_pixels);
 }
