@@ -84,7 +84,7 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
     vm = ViewMapper(viewangle=180)
     res = hdata.shape[-1]
     band = bw/vm.viewangle*res
-
+    hassource = True
     v = vm.pixelrays(res).reshape(-1, 3)
     omega = vm.pixel2omega(vm.pixels(res), res).ravel()
     lum = np.squeeze(sdata.reshape(-1, res**2))
@@ -93,14 +93,17 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
     # find peak in sdata (un shaded image)
     if sunloc is not None:
         sb_cpxyz = vm.pixel2ray(np.array(sunloc[0:2])[None], res)
-        up = translate.degrees(sb_cpxyz.ravel(), v) < 10
+        up = translate.degrees(sb_cpxyz.ravel(), v) < 3
     else:
         up = v[:, 2] > 0
         sb_cpxyz = None
-    pxyz = im.find_peak(v[up], omega[up], lum[up], peaka=srcsize)[0][0]
+    try:
+        pxyz = im.find_peak(v[up], omega[up], lum[up], peaka=srcsize)[0][0]
+    except TypeError:
+        print("Warning Zero Sun Energy! check -sunloc parameter", file=sys.stderr)
+        hassource = False
     if sb_cpxyz is None:
         sb_cpxyz = pxyz
-
     # blend along midpoint between two shadowbands
     rotation = 45+np.average((roh, rov))
     # profile angles of sun
@@ -188,26 +191,33 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
 
     blend[:, src_mask] = blend[:, src_mask] * (1 - outer_src_mask[src_mask][None]) + outer_src_mask[src_mask][None] * clum.T
 
-    # isolate area around source to gather lens flare energy
-    vm_valid = ViewMapper(pxyz, sfov).in_view(v, indices=False)
-    flare = sdata.reshape(3, -1)[:, vm_valid] - blend.reshape(3, -1)[:, vm_valid]
-    # discard under exposed pixels
-    flare[flare < 0] = 0
-    sol_luminance = np.sum(flare * omega[None, vm_valid], axis=1) / srcsize
-    if check is not None:
-        flare2 = np.maximum(sdata - blend, 0).reshape(3,-1)
-        flare2[:, np.logical_not(vm_valid)] = 0
-        io.array2hdr(flare2.reshape(sdata.shape), f"{check}_src.hdr")
-
-    opxyz = translate.rotate_elem(pxyz[None], 180).ravel()
-    source = (*opxyz, srcsize, sol_luminance)
     if envmap is not None:
         skyonly = np.copy(blend)
     else:
         skyonly = None
-    # draw source on image
-    mask = vm.in_view(v)
-    src = SrcViewPoint(None, np.asarray(pxyz).reshape(-1, 3), sol_luminance, res=1)
-    src.add_to_img(blend, v, mask, vm=vm)
 
+    if hassource:
+        # isolate area around source to gather lens flare energy
+        vm_valid = ViewMapper(pxyz, sfov).in_view(v, indices=False)
+        flare = sdata.reshape(3, -1)[:, vm_valid]
+        skyflare = blend.reshape(3, -1)[:, vm_valid]
+        sol_lumrgb = np.sum(flare * omega[None, vm_valid], axis=1) / srcsize
+        sol_lum = io.rgb2rad(sol_lumrgb)
+        print(sol_lum, sol_lumrgb, io.rgb2rad(np.max(flare, axis=1)), srcsize, np.sum(omega[None, vm_valid]), file=sys.stderr)
+        sky_lum = io.rgb2rad(np.sum(skyflare * omega[None, vm_valid], axis=1) / srcsize)
+        cf = (sol_lum - sky_lum) / sol_lum
+        sol_lumrgb *= cf
+        if check is not None:
+            flare2 = np.copy(sdata).reshape(3, -1) * cf
+            flare2[:, np.logical_not(vm_valid)] = 0
+            io.array2hdr(flare2.reshape(sdata.shape), f"{check}_src.hdr")
+
+        opxyz = translate.rotate_elem(pxyz[None], 180).ravel()
+        source = (*opxyz, srcsize, sol_lumrgb)
+        # draw source on image
+        mask = vm.in_view(v)
+        src = SrcViewPoint(None, np.asarray(pxyz).reshape(-1, 3), sol_lumrgb, res=1)
+        src.add_to_img(blend, v, mask, vm=vm)
+    else:
+        source = None
     return blend, skyonly, source

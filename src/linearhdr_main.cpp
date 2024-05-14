@@ -55,7 +55,6 @@
 #include <config.h>
 
 #include <iostream>
-#include <vector>
 #include <iomanip>
 
 #include <cstdio>
@@ -75,32 +74,6 @@ using namespace std;
 
 #define PROG_NAME "linearhdr"
 #define PROG_VERSION "0.1.9 (compiled on: " __DATE__ " @ " __TIME__ ")"
-
-inline float max(float a, float b) {
-    return (a > b) ? a : b;
-}
-
-inline float min(float a, float b) {
-    return (a > b) ? b : a;
-}
-
-inline float max(float a, float b, float c) {
-    return max(max(a, b), c);
-}
-
-inline float min(float a, float b, float c) {
-    return min(max(a, b), c);
-}
-
-inline float max(float a, float b, float c, float d) {
-    return max(max(max(a, b), c), d);
-}
-
-// since efcc happens before check for in range,
-// make sure efcc_correction does not pull over/underexposed values into range
-inline float efcc_corr(float val, float c, float o_low, float o_high){
-    return (val > o_low && val < 1 - o_high) ? val * c : val;
-}
 
 FrameInfo correct_exposure(FrameInfo info) {
     FrameInfo result = {1.f, 100.f, 1.f, 1.f};
@@ -123,7 +96,7 @@ void printHelp() {
                     "Version: " PROG_VERSION "\n"
                     "Options:\n"
                     "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.01\n"
-                    "\t[--range, -r <val>]: lower range of single raw exposure, used to set lower cutoff,"
+                    "\t[--range, -r <val>]: lower range of single raw exposure, used to set lower cutoff default=0.0,"
                     "\n\t\tgive as value between 0 and 0.25, default=0.01\n"
                     "\t[--tsv, -t]: output data as tsv (with header for pvalue -r)\n"
                     "\t[--oor-low, -m <val>]: value to use for out of range low, default from data\n"
@@ -138,8 +111,12 @@ void printHelp() {
                     "\t Note that if three sets are given, the last coeffs will apply to all exposure times regardless of 'm'\n"
                     "\t t*a*x**2 + t*b*x + 1+t*c\n"
                     "\t[--rgbe, -R]: output radiance rgbe (default)\n"
-                    "\t[--bayer, -B]: expect mosaic input (rawconvert --disinterp) ignores color correction in exposure_list header\n"
-                    "\t[--debayer, -D]: interpolate hdr output, overrides --bayer, but expects same input (rawconvert --disinterp)\n"
+                    "\t[--crop, -c <x y w h> use cropbox\n"
+                    "\t[--bayer, -B]: toggle  mosaic input (rawconvert -disinterp), default is true\n"
+                    "\t[--debayer, -D]: interpolate hdr output, overrides --bayer, but expects same input (rawconvert -disinterp)\n"
+                    "\t[--filter, -F]: toggle rank filter (only applies with --debayer), filters to 25th and 75th percentile of surrounding pixels. Default=true\n"
+                    "\t[--me, -M]: merge each, weight each color channel independently pixel wise\n"
+                    "\t[--ub, -U]: use best, pick exposure with best weight instead of weighted average\n"
                     "\t[--pfs, -P]: output pfs stream\n"
                     "\t[--exact, -e]: input camera values interpreted as exact (default=True)\n"
                     "\t[--nominal, -n]: input camera values interpreted as nominal (default=False)\n"
@@ -164,29 +141,30 @@ void linearhdr_main(int argc, char *argv[]) {
 
     /* defaults */
 
-    float opt_saturation_offset_perc = 0.01;
-    float opt_black_offset_perc = 0.01;
-    float opt_scale = 1.0f;
+    float sat_off = 0.01;
+    float blk_off = 0.00;
+    float scale = 1.0f;
     bool tsv = false;
     bool rgbe = true;
     bool nominal = false;
-    bool isbayer = false;
+    bool isbayer = true;
     bool demosaic = false;
+    bool median = true;
     bool ignore = false;
-    bool weightworst = true;
-    std::string wf = "s";
-    int wfi;
+    bool mergeeach = false;
+    bool usebest = false;
     float oor_high = -1;
     float oor_low = -1;
+    int crop[4] = {0, 0, 0, 0};
     float rgb_corr[3][3] = {{1.0, 0.0, 0.0},
                             {0.0, 1.0, 0.0},
                             {0.0, 0.0, 1.0}};
     float vlambda[3] = {0.333333, 0.333334, 0.333333};
+    float wsp[3] = {1, 1, 1};
     float rgbcal[3] = {1.0, 1.0, 1.0};
-    float efc[3][3] = {{0.0, 0.0, 0.0},
-                       {0.0, 0.0, 0.0},
-                       {0.0, 0.0, 0.0}};
-    float efcr[3] = {100.0, 100.0, 100.0};
+    float efc[3][4] = {{0.0, 0.0, 0.0, 0.0},
+                       {0.0, 0.0, 0.0, 0.0},
+                       {0.0, 0.0, 0.0, 0.0}};
     int efci = 0;
     /* helper */
     int c;
@@ -198,6 +176,7 @@ void linearhdr_main(int argc, char *argv[]) {
             {"pfs",    no_argument,       nullptr, 'P'},
             {"exact",    no_argument,       nullptr, 'e'},
             {"bayer",    no_argument,       nullptr, 'B'},
+            {"crop",    required_argument,       nullptr, 'c'},
             {"debayer",    no_argument,       nullptr, 'D'},
             {"nominal",    no_argument,       nullptr, 'n'},
             {"tsv", no_argument, nullptr, 't'},
@@ -211,15 +190,16 @@ void linearhdr_main(int argc, char *argv[]) {
             { "oob-low", required_argument, nullptr, 'm' },
             { "oob-high", required_argument, nullptr, 'x' },
             { "ignore", no_argument, nullptr, 'G' },
-            { "we", no_argument, nullptr, 'w' }, //undocumented if false weights by channels independently
-            { "wf", required_argument, nullptr, 'f' }, //undocumented weighting function h (hat),t (top),p (poisson noise), ,s (poisson noise with easing, Default)
+            { "filter", no_argument, nullptr, 'F' },
+            { "me", no_argument, nullptr, 'M' },
+            { "ub", no_argument, nullptr, 'U' },
             {nullptr, 0,                         nullptr, 0}
     };
 
     std::stringstream k; //to read in multivalue arguments
     int optionIndex = 0;
     int ci = 0;
-    while ((c = getopt_long(argc, argv, "hnevutGBDRwd:s:r:o:m:x:k:C:f:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hnevutMGBFDURd:s:r:o:m:x:k:C:c:", cmdLineOptions, &optionIndex)) != -1) {
         ci++;
         if (strlen(argv[ci]) > 2 && argv[ci][1] != '-'){
             char message[100];
@@ -235,6 +215,12 @@ void linearhdr_main(int argc, char *argv[]) {
             case 'v':
                 verbose = true;
                 break;
+            case 'M':
+                mergeeach = true;
+                break;
+            case 'U':
+                usebest = true;
+                break;
             case 'n':
                 nominal = true;
                 break;
@@ -242,10 +228,12 @@ void linearhdr_main(int argc, char *argv[]) {
                 nominal = false;
                 break;
             case 'B':
-                isbayer = true;
+                isbayer = not isbayer;
+                break;
+            case 'F':
+                median = not median;
                 break;
             case 'D':
-                isbayer = false;
                 demosaic = true;
                 break;
             case 'x':
@@ -259,29 +247,22 @@ void linearhdr_main(int argc, char *argv[]) {
                 ci++;
                 oor_low = atof(optarg);
                 break;
-            case 'f':
-                ci++;
-                k.str("");
-                k.clear();
-                k << optarg[0];
-                wf = k.str();
-                break;
             case 'o':
                 ci++;
-                opt_saturation_offset_perc = atof(optarg);
+                sat_off = atof(optarg);
 //                if( opt_saturation_offset_perc < 0 || opt_saturation_offset_perc > 0.25 )
 //                    throw pfs::Exception("saturation offset should be between 0 and 0.25");
                 break;
             case 'r':
                 ci++;
-                opt_black_offset_perc = atof(optarg);
+                blk_off = atof(optarg);
 //                if( opt_black_offset_perc < 0 || opt_black_offset_perc > 0.25 )
 //                    throw pfs::Exception("saturation offset should be between 0 and 0.25");
                 break;
             case 's':
                 ci++;
-                opt_scale = atof(optarg);
-                if( opt_scale <= 0)
+                scale = atof(optarg);
+                if( scale <= 0)
                     throw pfs::Exception("scale must be positive");
                 break;
             case 'k':
@@ -296,8 +277,15 @@ void linearhdr_main(int argc, char *argv[]) {
                 k.str("");
                 k.clear();
                 k << optarg;
-                k >> efcr[efci] >> efc[efci][0] >> efc[efci][1] >> efc[efci][2];
+                k >> efc[efci][0] >> efc[efci][1] >> efc[efci][2] >> efc[efci][3];
                 efci++;
+                break;
+            case 'c':
+                ci++;
+                k.str("");
+                k.clear();
+                k << optarg;
+                k >> crop[0] >> crop[1]  >> crop[2] >> crop[3];
                 break;
             case 't':
                 tsv = true;
@@ -308,35 +296,10 @@ void linearhdr_main(int argc, char *argv[]) {
             case 'P':
                 rgbe = false;
                 break;
-            case 'w':
-                weightworst = false;
-                break;
             default:
                 throw QuietException();
         }
     }
-
-
-    switch(wf.at(0)) {
-        case 'p':
-            wfi = 0;
-            break;
-        case 'h':
-            wfi = 1;
-            break;
-        case 't':
-            wfi = 2;
-            break;
-        case 's':
-            wfi = 3;
-            break;
-        default:
-            char message[100];
-            snprintf(message, 100, "--wf must be one of h (hat),t (top),p (poisson noise), ,s (poisson noise with easing) parsed: %s", wf.c_str());
-            throw pfs::Exception(message);
-    }
-
-
 
     if (argv[optind] == nullptr){
         printHelp();
@@ -352,7 +315,7 @@ void linearhdr_main(int argc, char *argv[]) {
     header << endl;
 
     std::ifstream infile(argv[optind]);
-
+    isbayer = isbayer && not demosaic;
     int frame_no = 0;
     int width = 0;
     int height = 0;
@@ -362,18 +325,17 @@ void linearhdr_main(int argc, char *argv[]) {
     float gmax = 1e-30;
     bool oorange = true;
     float pmax;
-    float calfac;
 
     // collected exposures
     ExposureList imgsR;
     ExposureList imgsG;
     ExposureList imgsB;
 
-
     // read through specification file loading header information and image frames
     while (true) {
         pmax = 0;
         pfs::Frame *iframe = nullptr;
+        pfs::Frame *outframe = nullptr;
         FrameInfo info = {1.f, 100.f, 1.f, 1.f};
 
         //--- read frames from list by parsing file
@@ -394,13 +356,17 @@ void linearhdr_main(int argc, char *argv[]) {
                         ss >> rgb_corr[1][0] >> rgb_corr[1][1] >> rgb_corr[1][2];
                         ss >> rgb_corr[2][0] >> rgb_corr[2][1] >> rgb_corr[2][2];
                     }
-                    if (!isbayer && comment.substr(begin, equal - begin) == "RGBcalibration"){
+                    if (demosaic && comment.substr(begin, equal - begin) == "RGBcalibration"){
                         istringstream ss(comment.substr(equal+1, comment.size()));
                         ss >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
                     }
                     if ( comment.substr(begin, equal - begin) == "LuminanceRGB"){
                         istringstream ss(comment.substr(equal+1, comment.size()));
                         ss >> vlambda[0] >> vlambda[1] >> vlambda[2];
+                    }
+                    if ( comment.substr(begin, equal - begin) == "WhiteSaturation"){
+                        istringstream ss(comment.substr(equal+1, comment.size()));
+                        ss >> wsp[0] >> wsp[1] >> wsp[2];
                     }
                     header  << cprefix << comment.substr(begin, comment.size()) << endl;
                 }
@@ -413,15 +379,32 @@ void linearhdr_main(int argc, char *argv[]) {
                 info.iso = 100;
                 info.aperture = 1;
             }
-            info.factor = opt_scale * 100.0f * info.aperture * info.aperture / ( info.iso * info.etime );
+            info.factor = scale * 100.0f * info.aperture * info.aperture / ( info.iso * info.etime );
 
             FILE *fh = fopen( framefile.c_str(), "rb");
             pfs::FrameFile ff = pfs::FrameFile( fh, framefile.c_str());
             HDRTiffReader reader( ff.fileName);
-            iframe = pfsio.createFrame( reader.getWidth(), reader.getHeight() );
             pfs::Channel *X, *Y, *Z;
-            iframe->createXYZChannels( X, Y, Z );
-            reader.readImage( X, Y, Z );
+            if (crop[2] == 0 || crop[3] == 0){
+                iframe = pfsio.createFrame( reader.getWidth(), reader.getHeight() );
+                iframe->createXYZChannels( X, Y, Z );
+                reader.readImage( X, Y, Z );
+            } else {
+                outframe = pfsio.createFrame( reader.getWidth(), reader.getHeight() );
+                pfs::Channel *Xi, *Yi, *Zi;
+                outframe->createXYZChannels( Xi, Yi, Zi );
+                reader.readImage( Xi, Yi, Zi );
+                iframe = pfsio.createFrame(crop[2], crop[3]);
+                iframe->createXYZChannels( X, Y, Z );
+                for (int i=0; i < crop[3]; i++)
+                    for (int j=0; j< crop[2]; j++) {
+                        (*X)(j, i) = (*Xi)(j + crop[0],i+crop[1]);
+                        (*Y)(j, i) = (*Yi)(j + crop[0],i+crop[1]);
+                        (*Z)(j, i) = (*Zi)(j + crop[0],i+crop[1]);
+                    }
+            }
+
+
 
         } else
             break; //no more lines
@@ -456,27 +439,17 @@ void linearhdr_main(int argc, char *argv[]) {
         // choose right efc coefficients
         for (int i = 0; i < 3; i++) {
             efci = i;
-            if (info.etime < efcr[i])
+            if (info.etime < efc[0][i])
                 break;
         }
 
         int s;
-        float efcc;
-        float pheight;
         for (int i = 0; i < height; i++)
             for (int j = 0; j < width; j++) {
                 s = j + i * width;
                 (*eR.yi)(s) = (*X)(s);
                 (*eG.yi)(s) = (*Y)(s);
                 (*eB.yi)(s) = (*Z)(s);
-                // apply electronic front curtain shutter correction
-                if (efc[efci][0] != 0){
-                    pheight = height - i;
-                    efcc = 1 / (1 + (efc[efci][0]*pheight*pheight + efc[efci][1]*pheight + efc[efci][2]) / info.etime);
-                    (*eR.yi)(s) = efcc_corr((*eR.yi)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
-                    (*eG.yi)(s) = efcc_corr((*eG.yi)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
-                    (*eB.yi)(s) = efcc_corr((*eB.yi)(s), efcc, opt_black_offset_perc, opt_saturation_offset_perc);
-                }
                 pmax = max((*eR.yi)(s), (*eG.yi)(s), (*eB.yi)(s), pmax);
         }
 
@@ -485,18 +458,20 @@ void linearhdr_main(int argc, char *argv[]) {
         imgsG.push_back(eG);
         imgsB.push_back(eB);
 
-        calfac = 0.0;
-        for (int m = 0; m < 3; m++)
-            calfac += vlambda[m] * rgbcal[m] * (rgb_corr[m][0] + rgb_corr[m][1] + rgb_corr[m][2]);
-        fmax = info.factor * (1 - opt_saturation_offset_perc) * calfac;
-        fmin = fmax * opt_black_offset_perc;
+        float calcfac = 0.0;
+        for (int m = 0; m < 3; m++) {
+            calcfac += vlambda[m] * rgbcal[m] * (rgb_corr[m][0] + rgb_corr[m][1] + rgb_corr[m][2]);
+        }
+
+        fmax = info.factor * (1 - sat_off) * calcfac;
+        fmin = fmax * max(blk_off, 0.005);
         gmax = max(gmax, fmax);
         gmin = min(gmin, fmin);
 
         frame_no++;
         VERBOSE_STR << "frame #" << frame_no << ", min:" << fmin << ", max:" << fmax <<  endl;
 
-        oorange = oorange && (pmax > 1 - opt_saturation_offset_perc);
+        oorange = oorange && (pmax > 1 - sat_off);
         pfsio.freeFrame(iframe);
     }
 
@@ -532,9 +507,11 @@ void linearhdr_main(int argc, char *argv[]) {
     const ExposureList *exposures[] = {&imgsR, &imgsG, &imgsB};
 
     VERBOSE_STR << "merging hdr..." << endl;
-    auto [saturated_pixels, under_pixels] = linear_response(RGB_out, exposures, opt_saturation_offset_perc,
-                         opt_black_offset_perc, opt_scale, vlambda, rgb_corr,
-                         oor_high, oor_low, isbayer, demosaic, weightworst, wfi);
+    long saturated_pixels, under_pixels;
+
+    tie(saturated_pixels, under_pixels) = linear_response(RGB_out, exposures, sat_off,
+                         blk_off, scale, rgb_corr, wsp, efc,
+                         oor_high, oor_low, isbayer, demosaic, mergeeach, usebest, median);
 
     if (under_pixels > 0) {
         header  << cprefix << "UNDEREXPOSED_PIXEL_CNT= " << under_pixels << endl;
@@ -569,7 +546,7 @@ void linearhdr_main(int argc, char *argv[]) {
         std::string hstring = header.str().substr(0,-1);
         writer.writeImage( Xj, Yj, Zj, hstring );
     } else {
-        if (demosaic || !isbayer)
+        if (demosaic)
             pfs::transformColorSpace(pfs::CS_RGB, Xj, Yj, Zj, pfs::CS_XYZ, Xj, Yj, Zj);
         pfsio.writeFrame(frame, stdout);
     }

@@ -1,14 +1,14 @@
 /**
  *
- * simplified hdr generation assuming raw linear response, fixes possible bugs in old code that lost absolute
- * calibration
+ * simplified hdr generation assuming raw linear response
  * @author Stephen Wasilewski stephen.wasilewski@epfl.ch
  *
  * Forked from: version pfstools 2.2.0:
  * @brief Robertson02 algorithm for automatic self-calibration.
  *
  * 
- * This file is derived from a part of PFS CALIBRATION package.
+ * This file is derived from a part of PFS CALIBRATION package (but at this
+ * point has mostly been entirely rewritten, but theseus' ship and all):
  * ---------------------------------------------------------------------- 
  * Copyright (C) 2004 Grzegorz Krawczyk
  * 
@@ -53,10 +53,7 @@
 
 
 #include <config.h>
-
 #include <iostream>
-#include <vector>
-
 #include <cmath>
 #include <linearhdr.h>
 
@@ -66,14 +63,6 @@ using namespace std;
 #define PROG_NAME "linearhdr"
 
 extern bool verbose; /* verbose should be declared for each standalone code */
-
-inline float max(float a, float b) {
-    return (a > b) ? a : b;
-}
-
-inline float min(float a, float b) {
-    return (a < b) ? a : b;
-}
 
 // based on the first green column (0 or 1) and first red row (0 or 1) return color at pixel coordinate
 int grid_color(int i, int j, int g0, int r0) {
@@ -89,11 +78,21 @@ int grid_color(int i, int j, int g0, int r0) {
 
 // basic photographic reciprocity (assumes calibrated aperture/exposure/iso
 float get_exposure_compensation(const Exposure &ex) {
-    return  100.0f * ex.aperture * ex.aperture / ( ex.exposure_time * ex.iso );
+    return  ( ex.exposure_time * ex.iso ) / (100.0f * ex.aperture * ex.aperture);
 }
 
-float get_weight(const Exposure &ex, const double x, const double s, int wfi){
-    return ex.exposure_time  / (1+ std::exp(-(0.88-x-s)/0.012));
+float get_weight(const double x, const double s){
+    return std::exp(-0.01/x - 0.01/(1-s-x)) + 1e-6;
+}
+
+void apply_color_transform(float irgb[3], float orgb[3], const float rgb_corr[3][3]){
+    float x, y, z;
+    x = irgb[0];
+    y = irgb[1];
+    z = irgb[2];
+    orgb[0] = max(0, x * rgb_corr[0][0] + y * rgb_corr[0][1] + z * rgb_corr[0][2]);
+    orgb[1] = max(0, x * rgb_corr[1][0] + y * rgb_corr[1][1] + z * rgb_corr[1][2]);
+    orgb[2] = max(0, x * rgb_corr[2][0] + y * rgb_corr[2][1] + z * rgb_corr[2][2]);
 }
 
 void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3]) {
@@ -106,154 +105,354 @@ void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3
     (*out[2])(j) = max(0, x * rgb_corr[2][0] + y * rgb_corr[2][1] + z * rgb_corr[2][2]);
 }
 
-
-// merge a demosaiced image weighting by channel with lowest weight
-void merge_worst(pfs::Array2D *out[],
-                 const ExposureList *imgs[],
-                 float& div,
-                 int k,
-                 const float opt_black_offset,
-                 const float opt_saturation_offset,
-                 const int wfi,
-                 bool& all_under,
-                 bool& all_over) {
-
-    bool saturated_exp;
-    bool under_exp;
-    float best_exp = 0.0;
-    int best_exp_i = -1;
-    int N = imgs[0]->size();
-    float w[N]; // stores the weight for each frame
-    float X[3][N]; // stores the value for each frame
-    fill(w, w + N, 1.0);
-    // loop over individual frames, calculating weights
-    for (int n = 0; n < N; n++) {
-        saturated_exp = false;
-        under_exp  = false;
-        for (int cc = 0; cc < 3; cc++) {
-            X[cc][n] = (*(*imgs[cc])[n].yi)(k) * get_exposure_compensation((*imgs[cc])[n]);
-            // weight by worst color channel
-            w[n] = min(w[n], get_weight((*imgs[cc])[n], (*(*imgs[cc])[n].yi)(k), opt_saturation_offset, wfi));
-            saturated_exp |= (*(*imgs[cc])[n].yi)(k) >= 1 - opt_saturation_offset;
-            under_exp  |= (*(*imgs[cc])[n].yi)(k) <= opt_black_offset;
-        }
-        if (!(saturated_exp || under_exp)) {
-            div += w[n];
-            for (int cc = 0; cc < 3; cc++) {
-                (*out[cc])(k) += X[cc][n] * w[n];
-            }
-            if (w[n] > best_exp) {
-                best_exp = w[n];
-                best_exp_i = n;
-            }
-        }
-        all_under &= under_exp;
-        all_over &= saturated_exp;
+float get_efc(int pixh, int height, float etime, const float efc[3][4]) {
+    // choose right efc coefficients
+    float efcc = 1.0;
+    int efci;
+    bool match;
+    for (efci = 0; efci < 3; efci++) {
+        match = etime < efc[0][efci];
+        if (match)
+            break;
     }
-    // just in case (can end up with a zero weight when finding worst color channel)
-    // but this should mean it is under-exposed
-    if (div <= 0 && !all_over)
-        all_under = true;
-
-    if (wfi == 2 && best_exp_i > -1) {
-        div = 1;
-        for (int cc = 0; cc < 3; cc++)
-            (*out[cc])(k) = X[cc][best_exp_i];
+    if (match) {
+        float pheight = height - pixh;
+        efcc = 1 / (1 + (efc[efci][1]*pheight*pheight + efc[efci][2]*pheight + efc[efci][3]) / etime);
     }
+    return efcc;
 }
 
 // merge a mosaic image considering adjacent pixels
 // helps to detect sensor blooming
-void merge_bayer_worst(pfs::Array2D *out[],
-                       const ExposureList *imgs[],
-                       float div[4],
-                       int i, int j, int r0, int g0,
-                       const float opt_black_offset,
-                       const float opt_saturation_offset,
-                       const int wfi,
-                       bool all_under[4],
-                       bool all_over[4]) {
-    bool saturated_exp;
-    bool under_exp;
-    float best_exp = 0.0;
+unsigned char merge(pfs::Array2D *out[],
+                    const ExposureList *imgs[],
+                    int i, int j, int r0, int g0,
+                    const float blk_off,
+                    const float sat_off,
+                    const float scale,
+                    const float wsp[3],
+                    const float efc[3][4],
+                    const bool best = false,
+                    const bool onep = false) {
     int N = imgs[0]->size();
     int width = out[0]->getCols();
     int height = out[0]->getRows();
     int k = j + i * width;
-    float w[N]; // stores the weight for each frame
-    float X[N]; // stores the value for each frame
-    float saturation;
-    float under;
-    fill(w, w + N, 0.0);
+    float w; // stores the weight for each frame
+    float div = 0.0;
+    for (int cc = 0; cc < 3; cc++) //make sure output is clear
+        (*out[cc])(k) = 0;
     int cc = grid_color(i, j, g0, r0);
-    const int bloommap[4][9] = {{2, 1, 2, 1, 0, 1, 2, 1, 2},
-                                {1, 0, 1, 2, 1, 2, 1, 0, 1},
-                                {0, 1, 0, 1, 2, 1, 0, 1, 0},
-                                {1, 2, 1, 0, 1, 0, 1, 2, 1}};
+    int fp0 = 0;
+    int fp = 5;
+    int bloomk[5][5];
+    fill(bloomk[0], bloomk[0] + 25, j + i * width);
+    int ccb;
     int bm = cc;
-    if (cc == 1 && ((i-r0) % 2) == 0)
+    if (cc == 1 && ((i-r0) % 2) == 0) // g2
         bm = 3;
-    int bloomk[9];
-    fill(bloomk, bloomk + 9, -1.0);
-    for (int bi = -1; bi < 2; bi++)
+    // 1D indices for image lookups
+    for (int bi = -2; bi < 3; bi++)
         if (i+bi >= 0 && i+bi < height)
-            for (int bj = -1; bj < 2; bj++) {
+            for (int bj = -2; bj < 3; bj++) {
                 if (j+bj >= 0 && j+bj < width)
-                    bloomk[(bi + 1) * 3 + bj + 1] = (j + bj) + (i + bi) * width;
+                    bloomk[bi + 2][bj + 2] = (j + bj) + (i + bi) * width;
             }
+    // the surrounding color channels for the 4 positions in the bayer CFA (r, g1, b, g2)
+    const int bloommap[4][5][5] = {{{0, 1, 0, 1, 0},
+                                    {1, 2, 1, 2, 1},
+                                    {0, 1, 0, 1, 0},
+                                    {1, 2, 1, 2, 1},
+                                    {0, 1, 0, 1, 0}},
+                                 {{1, 2, 1, 2, 1},
+                                  {0, 1, 0, 1, 0},
+                                  {1, 2, 1, 2, 1},
+                                  {0, 1, 0, 1, 0},
+                                  {1, 2, 1, 2, 1}},
+                                 {{2, 1, 2, 1, 2},
+                                  {1, 0, 1, 0, 1},
+                                  {2, 1, 2, 1, 2},
+                                  {1, 0, 1, 0, 1},
+                                  {2, 1, 2, 1, 2}},
+                                 {{1, 0, 1, 0, 1},
+                                  {2, 1, 2, 1, 2},
+                                  {1, 0, 1, 0, 1},
+                                  {2, 1, 2, 1, 2},
+                                  {1, 0, 1, 0, 1}}};
+    if (onep) { // to use a smaller footprint
+        fp = 4;
+        fp0 = 1;
+    }
+
     // loop over individual frames, calculating weights
+    bool all_under = true;
+    bool all_over = true;
+    bool saturated_exp;
+    bool under_exp;
+    float saturation_b; // highest raw value among surrounding pixels of different color
+    float saturation_a; // highest raw value among surrounding pixels of same color
+    float pvalue; // current pixel saturation
+    float under; // lowest raw value among surrounding pixels
+    float high = 0.0; // max value (including oor)
+    float low = 1e30; // min value (including oor)
+    float ec;
+    float bw = -1;
+    float bv = 0.0;
     for (int n = 0; n < N; n++) {
-        saturation = 0.0;
+        ec = get_exposure_compensation((*imgs[cc])[n]);
+        saturation_b = saturation_a = 0.0;
         under = 1.0;
-        for (int b = 0; b < 9; b++) {
-            if (bloomk[b] > -1) {
-                saturation = max(saturation, (*(*imgs[bloommap[bm][b]])[n].yi)(bloomk[b]));
-                under = min(under, (*(*imgs[bloommap[bm][b]])[n].yi)(bloomk[b]));
-            }
+        // first check surrounding pixels for saturation
+        for (int b = fp0; b < fp; b++)
+            for (int bj = fp0; bj < fp; bj++) {
+                if (bloomk[b][bj] > -1) {
+                    ccb = bloommap[bm][b][bj];
+                    if (ccb != cc) {
+                        saturation_b = max(saturation_b, (*(*imgs[ccb])[n].yi)(bloomk[b][bj]));
+
+                    } else {
+                        saturation_a = max(saturation_a, (*(*imgs[ccb])[n].yi)(bloomk[b][bj]));
+                    }
+                    under = min(under, (*(*imgs[ccb])[n].yi)(bloomk[b][bj]));
+                }
         }
-        saturated_exp = saturation >= 1 - opt_saturation_offset;
-        under_exp = under <= opt_black_offset;
-        all_under[cc] &= under_exp;
-        all_over[cc] &= saturated_exp;
+        pvalue = (*(*imgs[cc])[n].yi)(k);
+        // saturation of other colors
+        saturated_exp = saturation_b >= 1 - sat_off;
+        under_exp = under < blk_off;
+
+        high = max(high, min(pvalue, wsp[cc]) / ec);
+        low = min(low, pvalue / ec);
+
+        // if other channels are out of range, cap to white point of destination to avoid colored highlights
+        if (saturated_exp)
+            pvalue = min(pvalue, wsp[cc]);
+
+        // saturation of same color
+        saturated_exp |= saturation_a >= 1 - sat_off;
+
+        all_under &= under_exp;
+        all_over &= saturated_exp;
+
         if (!(saturated_exp || under_exp)) {
-            X[n] = (*(*imgs[cc])[n].yi)(k) * get_exposure_compensation((*imgs[cc])[n]);
-            w[n] = min(get_weight((*imgs[cc])[n], saturation, opt_saturation_offset, wfi),
-                       get_weight((*imgs[cc])[n], under, opt_saturation_offset, wfi));
-            if (wfi == 2 && w[n] > best_exp) {
-                best_exp = w[n];
-                div[cc] = 1;
-                (*out[cc])(k) = X[n];
-            }  else if (wfi != 2)  {
-                div[cc] += w[n];
-                (*out[cc])(k) += X[n] * w[n];
+            // use worst weight from surrounding pixels to include some IPC
+            w = min(get_weight(max(saturation_a, saturation_b), sat_off),
+                    get_weight(under, sat_off));
+            div += w  * ec;
+            if (efc[0][0] > 0)
+                pvalue *= get_efc(i, height, (*imgs[cc])[n].exposure_time, efc);
+            (*out[cc])(k) += w * pvalue;
+            // nullify poisson noise weighting (exchange with two lines above)
+            // div += w;
+            //(*out[cc])(k) += w * irgb[cc] / ec;
+            if (w * ec > bw) {
+                bw = w * ec;
+                bv = pvalue / ec;
             }
         }
     }
+    // after looping over all frames, now we can
+    // correct oor values and correctly weight output for in range
+    if (all_under) {
+        (*out[cc])(k) = low;
+    } else if (all_over) {
+        (*out[cc])(k) = high;
+    } else if (best) {
+        (*out[cc])(k) = scale * bv;
+    } else {
+        (*out[cc])(k) = scale * (*out[cc])(k) / div;
+    }
+    return all_under + all_over * 2;
+}
+
+// merge an RGB demosaiced sequence, weights by worst channel
+unsigned char merge_rgb(pfs::Array2D *out[],
+                        const ExposureList *imgs[],
+                        int i, int j,
+                        const float blk_off,
+                        const float sat_off,
+                        const float scale,
+                        const float wsp[3],
+                        const float rgb_corr[3][3],
+                        const float efc[3][4],
+                        const bool best = false) {
+    int N = imgs[0]->size();
+    int width = out[0]->getCols();
+    int height = out[0]->getRows();
+    int k = j + i * width;
+    float w; // stores the weight for each frame
+    float div = 0.0;
+    for (int cc = 0; cc < 3; cc++) //make sure output is clear
+        (*out[cc])(k) = 0;
+    // loop over individual frames, calculating weights
+    bool all_under = true;
+    bool all_over = true;
+    bool saturated_exp;
+    bool under_exp;
+    float saturation; // highest raw value among 3 colors
+    float under; // lowest raw value among 3 colors
+    float high[3] = {0.0, 0.0, 0.0}; // max value (including oor)
+    float low[3] = {1e30, 1e30, 1e30}; // min value (including oor)
+    float ec;
+    float bw = -1;
+    float bv[3] = {0.0, 0.0, 0.0};
+    float irgb[3];
+    float orgb[3];
+    for (int n = 0; n < N; n++) {
+        ec = get_exposure_compensation((*imgs[0])[n]);
+        irgb[0] = (*(*imgs[0])[n].yi)(k);
+        irgb[1] = (*(*imgs[1])[n].yi)(k);
+        irgb[2] = (*(*imgs[2])[n].yi)(k);
+        saturation = max(irgb[0], irgb[1], irgb[2]);
+        under = min(irgb[0], irgb[1], irgb[2]);;
+
+        saturated_exp = saturation >= 1 - sat_off;
+        under_exp = under < blk_off;
+        // need to also check that destination space is not out of range otherwise
+        // magenta highlights will creep in
+        apply_color_transform(irgb, orgb, rgb_corr);
+        saturated_exp |= max(orgb[0], orgb[1], orgb[2]) >= 1 - sat_off;
+        under_exp |= min(orgb[0], orgb[1], orgb[2]) < blk_off;
+
+        all_under &= under_exp;
+        all_over &= saturated_exp;
+
+        // use worst weight from all channels
+        w = min(get_weight(saturation, sat_off),
+                get_weight(under, sat_off));
+        if (!(saturated_exp || under_exp)) {
+            // no noise weighting: div += w
+            div += w * ec;
+            if (w * ec > bw) {
+                bw = w * ec;
+                bv[0] = (*(*imgs[0])[n].yi)(k) / ec;
+                bv[1] = (*(*imgs[1])[n].yi)(k) / ec;
+                bv[2] = (*(*imgs[2])[n].yi)(k) / ec;
+            }
+        }
+        float efcc = 1.0;
+        if (efc[0][0] > 0)
+            efcc = get_efc(i, height, (*imgs[0])[n].exposure_time, efc);
+
+        for (int cc = 0; cc < 3; cc++) {
+            irgb[cc] *= efcc;
+            high[cc] = max(high[cc], min(irgb[cc], wsp[cc])  / ec);
+            low[cc] = min(low[cc], irgb[cc] / ec);
+            // if other channels are out of range, cap to white point of destination to avoid (likely) magenta highlights
+            if (saturated_exp && irgb[cc] < 1 - sat_off)
+                irgb[cc] = min(irgb[cc], wsp[cc]);
+            if (!(saturated_exp || under_exp)) {
+                // no noise weighting: (*out[cc])(k) += w * pvalue[cc] / ec;
+                (*out[cc])(k) += w * irgb[cc];
+            }
+        }
+    }
+    // if all frames are either over or under and none are in range (shouldn't happen with good exposure sequence
+    // in camera raw space unless very peaky spectrum
+    if (div == 0)
+        all_over = true;
+
+    // after looping over all frames, now we can
+    // correct oor values and correctly weight output for in range
+    for (int cc = 0; cc < 3; cc++) {
+        if (all_under) {
+            (*out[cc])(k) = low[cc];
+        } else if (all_over) {
+            (*out[cc])(k) = high[cc];
+        } else if (best) {
+            (*out[cc])(k) = scale * bv[cc];
+        } else {
+            (*out[cc])(k) = scale * (*out[cc])(k) / div;
+        }
+    }
+    return all_under + all_over * 2;
+}
+
+// merge a single pixel channel (can be bayer or not)
+// does not track saturation or under flow, should only be used experimentally
+unsigned char merge_independent(pfs::Array2D *out[],
+                    const ExposureList *imgs[],
+                    int i, int j, int cc,
+                    const float blk_off,
+                    const float sat_off,
+                    const float scale,
+                    const float wsp,
+                    const float efc[3][4],
+                    const bool best = false) {
+    int N = imgs[0]->size();
+    int width = out[0]->getCols();
+    int height = out[0]->getRows();
+    int k = j + i * width;
+    float w; // stores the weight for each frame
+    float div = 0.0;
+    (*out[cc])(k) = 0; // reset pixel
+    // loop over individual frames, calculating weights
+    bool all_under = true;
+    bool all_over = true;
+    bool saturated_exp;
+    bool under_exp;
+    float high = 0.0; // max value (including oor)
+    float low = 1e30; // min value (including oor)
+    float ec;
+    float pvalue;
+    float bw = -1;
+    float bv = 0.0;
+    for (int n = 0; n < N; n++) {
+        ec = get_exposure_compensation((*imgs[cc])[n]);
+        pvalue = (*(*imgs[cc])[n].yi)(k);
+        saturated_exp = pvalue >= 1 - sat_off;
+        under_exp = pvalue < blk_off;
+
+        high = max(high, min(pvalue, wsp) / ec);
+        low = min(low, pvalue / ec);
+
+        all_under &= under_exp;
+        all_over &= saturated_exp;
+
+        if (!(saturated_exp || under_exp)) {
+            w = get_weight(pvalue, sat_off);
+            div += w  * ec;
+            if (efc[0][0] > 0)
+                pvalue *= get_efc(i, height, (*imgs[cc])[n].exposure_time, efc);
+            (*out[cc])(k) += w * pvalue;
+            if (w * ec > bw) {
+                bw = w * ec;
+                bv = pvalue / ec;
+            }
+        }
+    }
+    // after looping over all frames, now we can
+    // correct oor values and correctly weight output for in range
+    if (all_under) {
+        (*out[cc])(k) = low;
+    } else if (all_over) {
+        (*out[cc])(k) = high;
+    } else if (best) {
+        (*out[cc])(k) = scale * bv;
+    } else {
+        (*out[cc])(k) = scale * (*out[cc])(k) / div;
+    }
+    return all_under + all_over * 2;
 }
 
 std::tuple<long, long> linear_response(pfs::Array2D *out[],
                                        const ExposureList *imgs[],
-                                       const float opt_saturation_offset,
-                                       const float opt_black_offset,
+                                       const float sat_off,
+                                       const float blk_off,
                                        const float scale,
-                                       const float vlambda[3],
                                        const float rgb_corr[3][3],
+                                       const float wsp[3],
+                                       const float efc[3][4],
                                        const float oor_high,
                                        float oor_low,
                                        bool isbayer,
                                        const bool demosaic,
-                                       bool weightworst,
-                                       int wfi){
+                                       bool mergeeach,
+                                       bool usebest,
+                                       const bool median){
 
-    // governs primary merging, do we check all color channels, or merge channels independently
+    // governs primary merging, do we merge all color channels, or according to CFA
     isbayer = isbayer or demosaic;
-    // establish bayer grid coordinates
-    int g0 = first_non_zero((*imgs[1])[0].yi);
-    int r0 = first_non_zero_row((*imgs[0])[0].yi);
-
-    if (isbayer) {
-        VERBOSE_STR << "1st green column: " << g0 << " 1st red row: " << r0 << std::endl;
-    }
 
     // frame size
     int width = out[0]->getCols();
@@ -265,155 +464,81 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
     int saturated_pixels = 0;
     int under_pixels = 0;
 
-    // track maximum in range values (in target color space)
-    float mmax[3] = {0,0,0};
-    float mmin[3] = {1e30, 1e30, 1e30};
-    float lummax = 0;
-    float lummin = 1e30;
-    float lum;
-
-    // we will calculate the absolute and relative color averages to better match out of bounds values
-    // in target color space)
-    double aavg[3] = {0.0, 0.0, 0.0};
-    double ravg[3] = {0.0, 0.0, 0.0};
-
-
     int k; // used to ravel i,j pixel coordinates
-    int ccf = 0; // first color index in loop, adjusted at each pixel when isbayer
-    int cinc = isbayer ? 3: 1; // whether color loop will increment through all colors or only first
+    auto *oor = (unsigned char *) malloc(NP  * sizeof(unsigned char)); // track out of range pixels for masking
 
-    // loop over image
-    for (int i = 0; i < height; i++) {
-        for (int j = 0; j < width; j++) {
-            k = j + i * width;
-            for (int cc = 0; cc < 3; cc++)
-                (*out[cc])(k) = 0;
+    // establish bayer grid coordinates
+    int g0 = first_non_zero((*imgs[1])[0].yi);
+    int r0 = first_non_zero_row((*imgs[0])[0].yi);
 
-            float div[4] = {0.0, 0.0, 0.0, 0.0}; // track sum of weights for averaging
-            bool all_under[4] = {true, true, true, true};
-            bool all_over[4] = {true, true, true, true};
-            if (isbayer) {
-                ccf = grid_color(i, j, g0, r0);
-                merge_bayer_worst(out, imgs, div, i, j, r0, g0, opt_black_offset, opt_saturation_offset, wfi, all_under,
-                            all_over);
-            } else
-                merge_worst(out, imgs, div[3], k, opt_black_offset, opt_saturation_offset, wfi, all_under[3], all_over[3]);
-
-            // after looping over all frames, now we can
-            // flag oob values, correctly weight output and store min/max value
-            int wc;
-            for (int cc = ccf; cc < 3; cc += cinc) {
-                wc = (weightworst && !isbayer) ? 3 : cc;
-                if (all_over[wc]) {
-                    (*out[cc])(k) = -1;
-                    saturated_pixels++;
-                } else if (all_under[wc]) {
-                    (*out[cc])(k) = -2;
-                    under_pixels++;
-                } else {
-                    (*out[cc])(k) = (*out[cc])(k) / div[wc];
-                    // in this case directly store each channel max
-                    if (!weightworst || isbayer) {
-                        mmax[cc] = (mmax[cc] > (*out[cc])(k)) ? mmax[cc] : (*out[cc])(k);
-                        mmin[cc] = (mmin[cc] < (*out[cc])(k)) ? mmin[cc] : (*out[cc])(k);
-                    }
+    // three different merging algorithms, vary by what information is used to test and weight pixels
+    // (how many surrounding (CFA) or coincident (RGB) to include)
+    if (mergeeach) {
+        int ccf = 0; // first color index in loop, adjusted at each pixel when isbayer
+        int cinc = isbayer ? 3: 1; // whether color loop will increment through all colors or only first
+        for (int i = 0; i < height; i++)
+            for (int j = 0; j < width; j++) {
+                k = j + i * width;
+                if (isbayer)
+                    ccf = grid_color(i, j, g0, r0);
+                for (int cc = ccf; cc < 3; cc += cinc) {
+                    oor[k] = merge_independent(out, imgs, i, j, cc, blk_off, sat_off, scale, wsp[cc], efc, usebest);
+                    // track out of range
+                    saturated_pixels += oor[k] == 2;
+                    under_pixels += oor[k] == 1;
                 }
             }
-
-            // when operating on a demosaiced images, we want to balance max values to luminance
-            // (based on the target color space)
-            // store min/max luminance and running color averages
-            if (!(all_over[3] || all_under[3])) {
-                // apply color transformation
-                apply_color_transform(k, out, rgb_corr);
-
-                lum = (*out[0])(k) * vlambda[0] + (*out[1])(k) * vlambda[1] + (*out[2])(k) * vlambda[2];
-                for (int cc = 0; cc < 3; cc += 1) {
-                    aavg[cc] += (*out[cc])(k);
-                    ravg[cc] += (*out[cc])(k) / lum;
-                    mmin[cc] = (lum < lummin) ? (*out[cc])(k) : mmin[cc];
-                    mmax[cc] = (lum > lummax) ? (*out[cc])(k) : mmax[cc];
-                }
-                lummin = (lum < lummin) ? lum : lummin;
-                lummax = (lum > lummax) ? lum : lummax;
-            } else if (!isbayer && !weightworst)
-                apply_color_transform(k, out, rgb_corr);
-        }
-    } // end of first loop over pixels
-
-    // apply manual overrides
-    if (oor_high >= 0)
-        lummax = oor_high;
-    if (oor_low >= 0)
-        lummin = oor_low;
-
-    // just in case no values were in range
-    if (lummin > 1e29) {
-        lummin = 0;
-    }
-    for (int cc = 0; cc < 3; cc++) {
-        if (mmin[cc] > 1e29)
-            mmin[cc] = 0;
-    }
-
-    if (!demosaic) {
-        // these get triple counted
-        under_pixels = under_pixels / 3;
-        saturated_pixels = saturated_pixels / 3;
-    }
-
-    // correct min/max values to luminance (tends to avoid magenta highlights for out of bounds values)
-    if (weightworst && !isbayer) {
-        for (int cc = 0; cc < 3; cc += 1) {
-            aavg[cc] = aavg[cc] / (NP - under_pixels - saturated_pixels);
-            ravg[cc] = ravg[cc] / (NP - under_pixels - saturated_pixels);
-        }
-        float alum = aavg[0] * vlambda[0] + aavg[1] * vlambda[1] + aavg[2] * vlambda[2];
-        float rlum = ravg[0] * vlambda[0] + ravg[1] * vlambda[1] + ravg[2] * vlambda[2];
-
-        VERBOSE_STR << "Average Value: " << aavg[0] << ", " << aavg[1] << ", " << aavg[2] << ", " << alum << std::endl;
-        VERBOSE_STR << "Relative Average Value: " << ravg[0] << ", " << ravg[1] << ", " << ravg[2] << ", " << rlum << std::endl;
-
-        for (int cc = ccf; cc < 3; cc += cinc) {
-            if (rlum > 0)
-                mmin[cc] = ravg[cc] * lummin / rlum * scale;
-            if (alum > 0)
-                mmax[cc] = aavg[cc] * lummax / alum * scale;
-        }
-
     } else {
-        // only correct bayer input if setting to user override
-        for (int cc = 0; cc < 3; cc++) {
-            if (oor_high >= 0)
-                mmax[cc] = oor_high;
-            if (oor_low >= 0)
-                mmin[cc] = oor_low;
+        if (isbayer) {
+            VERBOSE_STR << "1st green column: " << g0 << " 1st red row: " << r0 << std::endl;
+            // loop over bayer image
+            for (int i = 0; i < height; i++)
+                for (int j = 0; j < width; j++) {
+                    k = j + i * width;
+                    oor[k] = merge(out, imgs, i, j, r0, g0, blk_off, sat_off, scale, wsp, efc, usebest);
+                    // track out of range
+                    saturated_pixels += oor[k] == 2;
+                    under_pixels += oor[k] == 1;
+                }
+        } else {
+            //loop over rgb image
+            for (int i = 0; i < height; i++)
+                for (int j = 0; j < width; j++) {
+                    k = j + i * width;
+                    oor[k] = merge_rgb(out, imgs, i, j, blk_off, sat_off, scale, wsp, rgb_corr, efc, usebest);
+                    // track out of range
+                    saturated_pixels += oor[k] == 2;
+                    under_pixels += oor[k] == 1;
+                }
         }
     }
-
-    // fill in out of range pixels
-    for (int i = 0; i < height; i++)
-        for (int j = 0; j < width; j++) {
-            k = j + i * width;
-            // only operate on relevant color when isbayer need to set ccf again in new loop
-            if (isbayer)
-                ccf = grid_color(i, j, g0, r0);
-            for (int cc = ccf; cc < 3; cc += cinc) {
-                (*out[cc])(k) = ((*out[cc])(k) == -1) ? mmax[cc] : (*out[cc])(k) * scale;
-                (*out[cc])(k) = ((*out[cc])(k) == -2) ? mmin[cc] : (*out[cc])(k) * scale;
+    if (isbayer && !demosaic) {
+        int cc;
+        // fill in out of range pixels
+        for (int i = 0; i < height; i++)
+            for (int j = 0; j < width; j++) {
+                k = j + i * width;
+                cc = grid_color(i, j, g0, r0);
+                if (oor[k] == 2 && oor_high >= 0)
+                    (*out[cc])(k) = oor_high;
+                if (oor[k] == 1 && oor_low >= 0)
+                    (*out[cc])(k) = oor_low;
             }
-        }
-
-    // demosaic after merge
-    if (demosaic){
-        dht_interpolate(out);
+    } else {
+        if (demosaic) // demosaic after merge
+            dht_interpolate(out, median);
         // in this case data not yet mapped to output colorspace, do this now
-        for (int j = 0; j < NP; j++)
+        for (int j = 0; j < NP; j++) {
             apply_color_transform(j, out, rgb_corr);
+            // mask out of range
+            for (int cc = 0; cc < 3; cc++) {
+                if (oor[k] == 2 && oor_high >= 0)
+                    (*out[cc])(j) = oor_high;
+                if (oor[k] == 1 && oor_low >= 0)
+                    (*out[cc])(j) = oor_low;
+            }
+
+        }
     }
-
-    VERBOSE_STR << "Maximum Value: " << mmax[0] << ", " << mmax[1] << ", " << mmax[2] << ", " << lummax << std::endl;
-    VERBOSE_STR << "Minimum Value: " << mmin[0] << ", " << mmin[1] << ", " << mmin[2] << ", " << lummin << std::endl;
-
-    return {saturated_pixels, under_pixels};
+    return std::make_tuple(saturated_pixels, under_pixels);
 }

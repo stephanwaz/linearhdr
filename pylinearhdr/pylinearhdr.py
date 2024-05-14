@@ -177,10 +177,8 @@ def process_dcraw_opt(val, img, callexif=True, avg=False):
     raise ValueError(f"Bad option given '{val}' could not be processed as an exiftool parameter")
 
 
-def rawconvert_opts(img, crop=None, bad_pixels=None, rawgrid=False, black="PerChannelBlackLevel",
-                    white="LinearityUpperMargin", rawcopts='', half=False, interpq="DHT"):
-    black = process_dcraw_opt(black, img, avg=True)
-    white = process_dcraw_opt(white, img, avg=True)
+def rawconvert_opts(img, crop=None, bad_pixels=None, rawgrid=False, black=None,
+                    white=None, rawcopts='', half=False, interpq="DHT"):
     cs = ""
     if crop is not None:
         cs = "-B {} {} {} {}".format(*crop)
@@ -193,7 +191,13 @@ def rawconvert_opts(img, crop=None, bad_pixels=None, rawgrid=False, black="PerCh
     else:
         iq = demosaic_dict[interpq]
         cs += f" -q {iq}"
-    return f"rawconvert {cs} -k {black} -S {white} {rawcopts}"
+    if black is not None:
+        black = process_dcraw_opt(black, img, avg=True)
+        cs += f" -k {black}"
+    if white is not None:
+        white = process_dcraw_opt(white, img, avg=True)
+        cs += f" -S {white}"
+    return f"rawconvert {cs} {rawcopts}"
 
 
 def get_raw_frame(img, correct=True, overwrite=False, listonly=False, rawconvertcom="rawconvert",

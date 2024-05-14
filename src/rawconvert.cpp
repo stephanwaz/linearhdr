@@ -373,7 +373,7 @@ RawProcessor.set_progress_handler(my_progress_callback,
     }
 
     if (OUT.user_black < 0) {
-        std::cerr << "WARNING! -k not set, computed black point is: " << C.black << std::endl;
+        std::cerr << "WARNING! -k not set (-black when called with pylinearhdr), computed black point is: " << C.black << std::endl;
     }
 
     if (LIBRAW_SUCCESS != (ret = RawProcessor.dcraw_process()))
@@ -385,7 +385,7 @@ RawProcessor.set_progress_handler(my_progress_callback,
     }
 
       if (OUT.user_sat < 0) {
-          std::cerr << "WARNING! -S not set, computed white point is: " << C.maximum << std::endl;
+          std::cerr << "WARNING! -S not set (-white when called with pylinearhdr), computed white point is: " << C.maximum << std::endl;
       }
 
 

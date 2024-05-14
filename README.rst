@@ -65,7 +65,7 @@ parameters. This allows for a two step process in case you would like to do any 
 
 Calibration
 -----------
-One of the main values in using pylinearhdr is that it provides an interface to include shutter speed, aperture, linearity, and
+One of the main values in using pylinearhdr is that it provides an interface to include shutter speed, aperture, and
 color/luminance calibration. These parameters can be saved in a .cfg file and loaded as::
 
     pylinearhdr -c calibration.cfg run "raw files" > merged.hdr

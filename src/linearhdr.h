@@ -66,15 +66,10 @@
 class Exposure
 {
 public:
-    float ti;			// exposure value (eg time) - including iso and apperture
     float exposure_time;          // exposure time
     float iso;                    // sensor gain iso value
     float aperture;
     pfs::Array2D* yi;		// exposed pixel value (camera output)
-
-    // to be able to sort exposures using stl
-    static bool msort( Exposure const & a, Exposure const & b)
-    { return a.ti < b.ti; }
 };
 
 
@@ -85,36 +80,24 @@ typedef std::vector<Exposure> ExposureList;
 
 struct FrameInfo {float etime; float iso; float aperture; float factor;};
 
-std::tuple<long, long> linear_response(pfs::Array2D *rgb_out[],
+std::tuple<long, long> linear_response(pfs::Array2D *out[],
                                     const ExposureList *imgs[],
-                                    const float opt_saturation_offset,
-                                    const float opt_black_offset,
-                                    const float scale,
-                                    const float vlambda[3],
-                                    const float rgb_corr[3][3],
-                                    const float oor_high = -1,
-                                    const float oor_low = -1,
-                                    bool isbayer = false,
-                                    const bool demosaic = false,
-                                    bool weightworst = true,
-                                    int wfi = 0);
-
-std::tuple<long, long> linear_response_slim(pfs::Array2D *out[],
-                                    const ExposureList *imgs[],
-                                    const float opt_saturation_offset,
-                                    const float opt_black_offset,
+                                    const float sat_off,
+                                    const float blk_off,
                                     const float scale,
                                     const float rgb_corr[3][3],
                                     const float wsp[3], // white saturation point in target color space of raw values
+                                    const float efc[3][4],
                                     const float oor_high,
                                     float oor_low,
                                     bool isbayer,
                                     const bool demosaic,
                                     bool mergeeach = false,
-                                    bool usebest = false);
+                                    bool usebest = false,
+                                    const bool median = true);
 
 
-void dht_interpolate(pfs::Array2D *imgdata[]);
+void dht_interpolate(pfs::Array2D *imgdata[], bool median = true);
 
 int first_non_zero_row(pfs::Array2D *X);
 
@@ -123,5 +106,29 @@ int first_non_zero(pfs::Array2D *X);
 int grid_color(int i, int j, int g0, int r0);
 
 void apply_color_transform(int j, pfs::Array2D *out[], const float rgb_corr[3][3]);
+
+void apply_color_transform(float irgb[3], float orgb[3], float rgb_corr[3][3]);
+
+float get_efc(int pixh, int height, float etime, const float efc[3][4]);
+
+inline float max(float a, float b) {
+    return (a > b) ? a : b;
+}
+
+inline float min(float a, float b) {
+    return (a > b) ? b : a;
+}
+
+inline float max(float a, float b, float c) {
+    return max(max(a, b), c);
+}
+
+inline float min(float a, float b, float c) {
+    return min(min(a, b), c);
+}
+
+inline float max(float a, float b, float c, float d) {
+    return max(max(max(a, b), c), d);
+}
 
 #endif /* #ifndef _linearhdr_h_ */

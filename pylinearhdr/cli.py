@@ -167,11 +167,11 @@ shared_run_opts = [
     click.option("-badpixels", callback=is_file_or_tup_int,
                                 help="file of bad pixels (rows: xpix ypix 0) where xpix is from left and ypix is "
                                      "from top or list of bad pixes x1,y1 x2,y2 etc."),
-    click.option("-black", default="PerChannelBlackLevel",
+    click.option("-black",
                 help="rawconvert darkness level. either a number(s) or exiftool key, it is critical this is kept "
                      "consistent between calibration and make_list/run. Possible options: AverageBlackLevel, "
                      "PerChannelBlackLevel, 2049 '2049 2049 2049 2049'"),
-    click.option("-white", default="LinearityUpperMargin",
+    click.option("-white",
                 help="rawconvert saturation level. either a number or exiftool key, it is critical this is kept "
                      " consistent between calibration and make_list/run. Possible options: NormalWhiteLevel, "
                      "SpecularWhiteLevel, LinearityUpperMargin, 10000"),
@@ -199,8 +199,8 @@ shared_run_opts = [
     click.option("-nd", default=0.0, help="additional ND filter (applies to ISO, so do not use -s with linearhdr)"),
     click.option("-saturation", "-saturation-offset", "-s", default=0.01,
                  help="saturation offset, if white is not LinearityUpperMargin, this must be changed"),
-    click.option("-range", "-r", default=0.01,
-                 help="lower range of single raw exposure"),
+    click.option("-range", "-r", default=0.0,
+                 help="lower range of single raw exposure, typically leave at zero"),
     click.option("-rawmultipliers", default=None, callback=clk.split_float,
                  help="override default premultipliers (1, 1, 1)"),
     click.option("--verbose/--no-verbose", default=False,
@@ -236,18 +236,11 @@ shared_run_opts = [
 ]
 
 
-def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.01,
+def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.0,
                  crop=None, badpixels=None, callhdr=False, rawcopts="", hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
-                 black="AverageBlackLevel", white="AverageBlackLevel", colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
+                 black=None, white=None, colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
                  interpfirst=False, header_line=None, half=False, rawmultipliers=None, interpq="DHT", executable="linearhdr", **kwargs):
     """make list routine, use to generate input to linearhdr"""
-    if executable == "linearhdr":
-        needs_full = "-wf" in hdropts or "-f" in hdropts
-        needs_ext = "--we" in hdropts or ("-w" in hdropts and not needs_full)
-        if needs_ext:
-            executable = "linearhdr_full"
-        elif not needs_full:
-            executable = "linearhdr_slim"
     if half:
         interpfirst = True
         rawgrid = False
@@ -256,15 +249,17 @@ def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scal
     else:
         header_line = list(header_line)
     multipliers = np.array([1, 1, 1])
+    # if corrected chromatic abberation, better to not crop in libraw, so forward command to linearhdr
+    if "-C" in rawcopts and crop is not None:
+        hdropts += " --crop '{} {} {} {}'".format(*crop)
+        crop = None
     if verbose:
         hdropts += " --verbose"
     if rawgrid:
         colorspace = 'raw'
-        if executable != "linearhdr_slim":
-            hdropts += " -B"
     elif not interpfirst:
         hdropts += " -D"
-    if executable == "linearhdr_slim" and interpfirst and not rawgrid:
+    if interpfirst and not rawgrid:
         hdropts += " -B"
     outf = sys.stdout
     outfn = "<makelist.txt>"
@@ -477,14 +472,17 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
     blended, skyonly, source = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw,
                                              envmap=envmap, sunloc=sunloc, check=check)
     vm = ViewMapper((0.0, -1.0, 0.0), viewangle=180)
-    csp = "CENTRAL_SOURCE_PIXEL= {} {}".format(*vm.ray2pixel(source[0:3], hdata.shape[-1], False).ravel())
-    header = [sbobt, csp] + hh + hv + hs + [vm.header()]
-
+    if source is not None:
+        csp = "CENTRAL_SOURCE_PIXEL= {} {}".format(*vm.ray2pixel(source[0:3], hdata.shape[-1], False).ravel())
+        header = [sbobt, csp] + hh + hv + hs + [vm.header()]
+    else:
+        header = [sbobt] + hh + hv + [vm.header()]
     io.carray2hdr(blended, outf, header, clean=True)
     if skyonly is not None:
-        srcsize = (source[3] / np.pi) ** .5 * 360/np.pi
-        header.append("SOLARSOURCE= " + "void light sun 0 0 3 {} {} {} sun source solar 0 0 4 {} {} {} {}".format(*source[4], *source[0:3], srcsize))
-        header.append("SKYSOURCE= " + "void colorpict imgfunc 9 red green blue {} fisheye.cal fish_u fish_v -rz 180 0 0 imgfunc glow imgglow 0 0 4 1 1 1 0 imgglow source sky 0 0 4 0 -1 0 180".format(envmap))
+        if source is not None:
+            srcsize = (source[3] / np.pi) ** .5 * 360/np.pi
+            header.append("SOLARSOURCE= " + "void light sun 0 0 3 {} {} {} sun source solar 0 0 4 {} {} {} {}".format(*source[4], *source[0:3], srcsize))
+            header.append("SKYSOURCE= " + "void colorpict imgfunc 9 red green blue {} fisheye.cal fish_u fish_v -rz 180 0 0 imgfunc glow imgglow 0 0 4 1 1 1 0 imgglow source sky 0 0 4 0 -1 0 180".format(envmap))
         io.carray2hdr(skyonly, envmap, header, clean=True)
 
 

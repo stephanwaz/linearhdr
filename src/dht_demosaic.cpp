@@ -96,7 +96,7 @@ int first_non_zero(pfs::Array2D *X) {
 //edit: better to pass non-zero values when that is the desired effect
 //this results in NAN when one channel in denominator is 0, wiping out any pixels
 //take information from a zero pixel.
-static const float FLOOR = 0.00001;
+static const float FLOOR = 0.000008;
 
 struct DHT {
     int nr_height, nr_width, iwidth, iheight; //SW
@@ -292,13 +292,13 @@ struct DHT {
     }
 
     static inline float scale_over(float ec, float base) {
-        float s = base * .001f;
+        float s = base * .4f;
         float o = ec - base;
         return base + sqrt(s * (o + s)) - s;
     }
 
     static inline float scale_under(float ec, float base) {
-        float s = base * .001f;
+        float s = base * .6f;
         float o = base - ec;
         return base - sqrt(s * (o + s)) + s;
     }
@@ -315,15 +315,15 @@ struct DHT {
     }
 
     ~DHT();
-    DHT(pfs::Array2D *imgdata[]); //SW base on pfs::Array
+    explicit DHT(pfs::Array2D *imgdata[]); //SW base on pfs::Array
 
     // main executions steps
     void make_hv_dirs() const;
     void make_greens();
     void make_diag_dirs() const;
     void make_rb();
-    void copy_to_image(pfs::Array2D *imgdata[]);
-
+    void copy_to_image(pfs::Array2D *imgdata[]) const;
+    void copy_to_image_median(pfs::Array2D *imgdata[]) const;
     // internal functions
     void refine_hv_dirs(int i, int js) const;
     void refine_ihv_dirs(int i) const;
@@ -613,8 +613,8 @@ void DHT::make_gline(int i) {
         float min, max;
         min = MIN(nraw[k(y + dy, x + dx)][1], nraw[k(y + dy2, x + dx2)][1]);
         max = MAX(nraw[k(y + dy, x + dx)][1], nraw[k(y + dy2, x + dx2)][1]);
-//        min /= 1.2f;
-//        max *= 1.2f;
+        min /= 1.2f;
+        max *= 1.2f;
         // if value is well outsides bounds of two adjacent green pixels, scale back towards center
         if (eg < min)
             eg = scale_under(eg, min);
@@ -780,8 +780,8 @@ void DHT::make_rbdiag(int i) {
         float min, max;
         min = MIN(nraw[k(y + dy, x + dx)][cl], nraw[k(y + dy2, x + dx2)][cl]);
         max = MAX(nraw[k(y + dy, x + dx)][cl], nraw[k(y + dy2, x + dx2)][cl]);
-//        min /= 1.2f;
-//        max *= 1.2f;
+        min /= 1.2f;
+        max *= 1.2f;
         // if value is well outsides bounds of two adjacent pixels, scale back towards center
         if (eg < min)
             eg = scale_under(eg, min);
@@ -849,10 +849,10 @@ void DHT::make_rbhv(int i) {
         float min_b, max_b;
         min_b = MIN(nraw[k(y + dy, x + dx)][2], nraw[k(y + dy2, x + dx2)][2]);
         max_b = MAX(nraw[k(y + dy, x + dx)][2], nraw[k(y + dy2, x + dx2)][2]);
-//        min_r /= 1.2f;
-//        max_r *= 1.2f;
-//        min_b /= 1.2f;
-//        max_b *= 1.2f;
+        min_r /= 1.2f;
+        max_r *= 1.2f;
+        min_b /= 1.2f;
+        max_b *= 1.2f;
 
         if (eg_r < min_r)
             eg_r = scale_under(eg_r, min_r);
@@ -876,15 +876,43 @@ void DHT::make_rbhv(int i) {
     }
 }
 
-
-
 /*
  * перенос изображения в выходной массив
  *
  * transfer image to the output array
  */
+// step 5 ( with weak median/percentile filter: values are constrained to the 25th and 75th percentiles)
+void DHT::copy_to_image_median(pfs::Array2D *imgdata[]) const {
+    // add median filter
+    unsigned long neighbors[9];
+    unsigned long pidx;
+    std::fill(neighbors, neighbors + 9, 0.0);
+    float nvals[9];
+
+    for (int i = 0; i < iheight; ++i)
+        for (int j = 0; j < iwidth; ++j) {
+            pidx = k(i + nr_topmargin, j + nr_leftmargin);
+            for (int bi = -1; bi < 2; bi++)
+                for (int bj = -1; bj < 2; bj++) {
+                    neighbors[(bi + 1) * 3 + bj + 1] = k(i + bi + nr_topmargin, j + bj + nr_leftmargin);
+                }
+            for (int cc = 0; cc < 3; cc++) {
+                for (int m = 0; m < 9; m++){
+                    nvals[m] = nraw[neighbors[m]][cc];
+                }
+                std::sort(nvals, nvals + 9);
+                if (nraw[pidx][cc] < nvals[2])
+                    (*imgdata[cc])(j, i) = nvals[2] - FLOOR;
+                else if (nraw[pidx][cc] > nvals[6])
+                    (*imgdata[cc])(j, i) = nvals[6] - FLOOR;
+                else
+                    (*imgdata[cc])(j, i) = nraw[pidx][cc] - FLOOR;
+            }
+
+        }
+}
 // step 5
-void DHT::copy_to_image(pfs::Array2D *imgdata[]) {
+void DHT::copy_to_image(pfs::Array2D *imgdata[]) const {
     unsigned long pidx;
     for (int i = 0; i < iheight; ++i)
         for (int j = 0; j < iwidth; ++j) {
@@ -899,11 +927,16 @@ DHT::~DHT() {
     free(ndir);
 }
 
-void dht_interpolate(pfs::Array2D *imgdata[]) {
+void dht_interpolate(pfs::Array2D *imgdata[], const bool median) {
     DHT dht(imgdata);
     dht.make_hv_dirs();
     dht.make_greens();
     dht.make_diag_dirs();
     dht.make_rb();
-    dht.copy_to_image(imgdata);
+    if (median) {
+        dht.copy_to_image_median(imgdata);
+    } else {
+        dht.copy_to_image(imgdata);
+    }
+
 }
