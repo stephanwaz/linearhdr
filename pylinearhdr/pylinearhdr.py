@@ -23,7 +23,9 @@ from math import log2
 from raytools import io
 from raytools.mapper import ViewMapper
 import numpy as np
+from raytools.utility import pool_call
 from scipy.interpolate import UnivariateSpline
+import tifffile as tiff
 
 
 PREDEFINED_COLORS = dict(rad=((0.640, 0.330, 0.290, 0.600, 0.150, 0.060), (0.3333, 0.3333)),
@@ -403,3 +405,82 @@ def color_convert_img(imgd, header, inp, outp, xyzrgb=None, rgbrgb=None, oxyzrgb
         v = 9 * rgb[1] / d
         rgb = np.stack((rgb[1], u, v))
     return rgb, header + newheader
+
+
+def align_images(im0, im1, bottom=True, logval=True):
+    """code modified from: https://github.com/khufkens/align_images (AGPL-3.0 License)
+
+    see: https://en.wikipedia.org/wiki/Phase_correlation
+    """
+
+    xi = im0.shape[0]
+    yi = im0.shape[1]
+
+    # only use lower half of image to avoid cloud movement
+    if bottom:
+        yi = int(yi/2)
+        im0 = im0[:, :yi]
+        im1 = im1[:, :yi]
+
+    # add a cosine weighted window function to avoid edge effects
+    xy = (np.stack(np.mgrid[0:xi, 0:yi], 2) + 0.5) / np.array((xi/2, yi/2)) - 1
+    window = np.maximum(0, 1 - np.linalg.norm(xy, axis=2))
+
+    # take log of values to downplay extreme peaks (which are often not expected to be aligned)
+    if logval:
+        im0 = np.log10(im0 + 1) * window
+        im1 = np.log10(im1 + 1) * window
+    else:
+        im0 = im0 * window
+        im1 = im1 * window
+
+    f0 = np.fft.fft2(im0)
+    f1 = np.fft.fft2(im1)
+    # original code differs from wikipedia (but yields same result:
+    # original:
+    # ir0 = abs(np.fft.ifft2((f0 * f1.conjugate()) / (abs(f0) * abs(f1))))
+    # wikipedia:
+    p = f0 * f1.conjugate()
+    ir = abs(np.fft.ifft2(p / abs(p)))
+    xo, yo = np.unravel_index(np.argmax(ir), im0.shape)
+    if xo > im0.shape[0] // 2:
+        xo -= im0.shape[0]
+    if yo > im0.shape[1] // 2:
+        yo -= im0.shape[1]
+    return xo, yo
+
+
+def do_alignment(img, xo, yo, margin=0):
+    xt = slice(max(0, margin + xo), min(img.shape[1], xo + img.shape[1] - margin))
+    yt = slice(max(0, margin + yo), min(img.shape[2], yo + img.shape[2] - margin))
+    xt2 = slice(0, xt.stop-xt.start)
+    yt2 = slice(0, yt.stop-yt.start)
+    img2 = np.zeros((img.shape[0], img.shape[1] - margin * 2, img.shape[2] - margin * 2), dtype=img.dtype)
+    img2[:, xt2, yt2] = img[:, xt, yt]
+    return img2
+
+
+def _align_tiffs(rng, tiffs, img0):
+    for i in rng:
+        img1 = tiff.imread(tiffs[i]).T[:, ::-1]
+        xo, yo = align_images(np.max(img1, axis=0), np.max(img0, axis=0), False, False)
+        print(tiffs[i], xo, yo, file=sys.stderr)
+        if xo != 0 or yo != 0:
+            img0 = do_alignment(img1, xo, yo)
+            tiff.imwrite(tiffs[i], img0[:, ::-1].T)
+        else:
+            img0 = img1
+
+
+def align_tiffs(tiffs):
+    """take a list of tiff files and align starting with middle exposure"""
+    t0 = int(len(tiffs) / 2)
+    rngs = []
+    if t0 > 0:
+        rngs.append(range(t0-1, -1, -1))
+    if len(tiffs) > 1:
+        rngs.append(range(t0+1, len(tiffs), 1))
+    print("img alignment:", file=sys.stderr)
+    img0 = tiff.imread(tiffs[t0]).T[:, ::-1]
+    pool_call(_align_tiffs, rngs, tiffs, img0, expandarg=False, pbar=False)
+    print("", file=sys.stderr)

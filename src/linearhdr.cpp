@@ -476,11 +476,16 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
     if (mergeeach) {
         int ccf = 0; // first color index in loop, adjusted at each pixel when isbayer
         int cinc = isbayer ? 3: 1; // whether color loop will increment through all colors or only first
+        if (isbayer)
+            VERBOSE_STR << "1st green column: " << g0 << " 1st red row: " << r0 << std::endl;
         for (int i = 0; i < height; i++)
             for (int j = 0; j < width; j++) {
                 k = j + i * width;
-                if (isbayer)
+                if (isbayer) {
                     ccf = grid_color(i, j, g0, r0);
+                    (*out[0])(k) = (*out[1])(k) = (*out[2])(k) = 0;
+                }
+
                 for (int cc = ccf; cc < 3; cc += cinc) {
                     oor[k] = merge_independent(out, imgs, i, j, cc, blk_off, sat_off, scale, wsp[cc], efc, usebest);
                     // track out of range

@@ -227,6 +227,8 @@ shared_run_opts = [
                  help="linearhdr executable"),
     click.option("--correct/--no-correct", default=True,
                  help="apply correction to nominal aperture and shutter speed values, use with linearhdr --exact"),
+    click.option("--align/--no-align", default=False,
+                 help="align exposure sequence prior to merging"),
     click.option("--listonly/--no-listonly", default=False,
                  help="skip execution and just print metadata"),
     click.option("-hdropts", default="", help="additional options to linearhdr (with callhdr, overrides -r -s)"),
@@ -239,7 +241,7 @@ shared_run_opts = [
 def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scale=1.0, nd=0.0, saturation=0.01, range=0.0,
                  crop=None, badpixels=None, callhdr=False, rawcopts="", hdropts="", fo=None, fisheye=False, xyzcam=None, cscale=None, shutterc=None,
                  black=None, white=None, colorspace='rad', clean=False, vfile=None, verbose=False, rawgrid=False,
-                 interpfirst=False, header_line=None, half=False, rawmultipliers=None, interpq="DHT", executable="linearhdr", **kwargs):
+                 interpfirst=False, header_line=None, half=False, rawmultipliers=None, interpq="DHT", executable="linearhdr", align=False, **kwargs):
     """make list routine, use to generate input to linearhdr"""
     if half:
         interpfirst = True
@@ -281,6 +283,9 @@ def makelist_run(ctx, imgs, overwrite=False, correct=False, listonly=False, scal
                                        black=black, white=white, rawcopts=rawcopts, half=half, interpq=interpq)
     tiffs = pool_call(pl.get_raw_frame, imgs, correct=correct, overwrite=overwrite, rawconvertcom=rawconvertcom, fo=fo,
                      shutterc=shutterc, listonly=listonly, expandarg=False, pbar=False)
+    if align:
+        tiff_list = [t[0] for t in sorted(tiffs, key=lambda x: x[1])]
+        pl.align_tiffs(tiff_list)
     cam_rgb, header = pl.cam_color_mtx(xyzcam, colorspace, cscale=cscale)
     print(f"# {rawconvertcom}", file=outf)
     print(f"# pylinearhdr_VERSION= {pylinearhdr.__version__}", file=outf)
@@ -447,17 +452,11 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
             margin = 0
         else:
             t = slice(margin, -margin)
-        xo, yo = sb.align_images(hdata[0, t, t], vdata[0, t, t])
+        xo, yo = pl.align_images(hdata[0, t, t], vdata[0, t, t])
         sdata = sdata[:, t, t]
         vdata = vdata[:, t, t]
         if np.sum(np.abs((xo, yo))) > 0:
-            xt = slice(max(0, margin + xo), min(hdata.shape[1], xo + hdata.shape[1] - margin))
-            yt = slice(max(0, margin + yo), min(hdata.shape[2], yo + hdata.shape[2] - margin))
-            xt2 = slice(0, xt.stop-xt.start)
-            yt2 = slice(0, yt.stop-yt.start)
-            hdata2 = np.zeros_like(sdata)
-            hdata2[:, xt2, yt2] = hdata[:, xt, yt]
-            hdata = hdata2
+            hdata = pl.do_alignment(hdata, xo, yo, margin)
             hh.append(f"\tSHADOWBAND_IMAGE_ALIGN= {xo} {yo}")
         else:
             hdata = hdata[:, t, t]

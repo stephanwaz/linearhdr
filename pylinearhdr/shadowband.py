@@ -41,44 +41,6 @@ def blend_bands(x, b, c=None):
     return np.where(x > b, np.where(x < b+c, np.cos((x-b)*np.pi/c)/2+.5, 0), 1)
 
 
-def align_images(im0, im1, bottom=True):
-    """code modified from: https://github.com/khufkens/align_images (AGPL-3.0 License)
-
-    see: https://en.wikipedia.org/wiki/Phase_correlation
-    """
-
-    xi = im0.shape[0]
-    yi = im0.shape[1]
-
-    if bottom: # only use lower half of image to avoid cloud movement
-        yi = int(yi/2)
-        im0 = im0[:, :yi]
-        im1 = im1[:, :yi]
-
-    # add a cosine weighted window function to avoid edge effects
-    xy = (np.stack(np.mgrid[0:xi, 0:yi], 2) + 0.5) / np.array((xi/2, yi/2)) - 1
-    window = np.maximum(0, 1 - np.linalg.norm(xy, axis=2))
-
-    # take log of values to downplay extreme peaks (which are often not expected to be aligned)
-    im0 = np.log10(im0 + 1) * window
-    im1 = np.log10(im1 + 1) * window
-
-    f0 = np.fft.fft2(im0)
-    f1 = np.fft.fft2(im1)
-    # original code differs from wikipedia (but yields same result:
-    # original:
-    # ir0 = abs(np.fft.ifft2((f0 * f1.conjugate()) / (abs(f0) * abs(f1))))
-    # wikipedia:
-    p = f0 * f1.conjugate()
-    ir = abs(np.fft.ifft2(p / abs(p)))
-    xo, yo = np.unravel_index(np.argmax(ir), im0.shape)
-    if xo > im0.shape[0] // 2:
-        xo -= im0.shape[0]
-    if yo > im0.shape[1] // 2:
-        yo -= im0.shape[1]
-    return xo, yo
-
-
 def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-05, bw=2.0,
                envmap=False, sunloc=None, check=None):
     vm = ViewMapper(viewangle=180)
@@ -203,7 +165,6 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
         skyflare = blend.reshape(3, -1)[:, vm_valid]
         sol_lumrgb = np.sum(flare * omega[None, vm_valid], axis=1) / srcsize
         sol_lum = io.rgb2rad(sol_lumrgb)
-        print(sol_lum, sol_lumrgb, io.rgb2rad(np.max(flare, axis=1)), srcsize, np.sum(omega[None, vm_valid]), file=sys.stderr)
         sky_lum = io.rgb2rad(np.sum(skyflare * omega[None, vm_valid], axis=1) / srcsize)
         cf = (sol_lum - sky_lum) / sol_lum
         sol_lumrgb *= cf
