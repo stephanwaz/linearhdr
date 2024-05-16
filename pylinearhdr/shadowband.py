@@ -93,8 +93,9 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
     pdiff = np.abs(sangles - pangles) * 180/np.pi
 
     ce = vm.ctheta(sb_cpxyz)[0]
+    vms = ViewMapper(dxyz=sb_cpxyz, viewangle=45)
     # anything within 3 degrees of both shadowbands
-    outer_src_mask = np.linalg.norm(pdiff, axis=2) < bw * (2 - ce)
+    outer_src_mask = np.logical_or(np.linalg.norm(pdiff, axis=2) < bw * (2 - ce),  vms.degrees(v).reshape(mask.shape) < bw * 1.5)
     # blur to create tolerance regions
     outer_src_mask = ndimage.uniform_filter(outer_src_mask.astype(float), band/2)
     # use this area for interpolation
@@ -112,46 +113,65 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
     blend = (vdata * mask + hdata * (1-mask)) * (1 - outer_src_mask) + outer_src_mask * np.maximum(vdata, hdata)
 
     if check is not None:
-        mask3 = np.copy(np.broadcast_to(mask, (3, *mask.shape)))
-        # mask3[0, src_mask] = 0
-        # mask3[1, src_mask] = 1 - mask3[1, src_mask]
-        # mask3[2, src_mask] = mask3[2, src_mask]
-        # mask3[1:, outer_src_mask >= .5] = 0
-        # mask3[0, outer_src_mask >= .5] = 1
-        io.array2hdr(mask3, f"{check}_mask.hdr")
+        io.array2hdr(mask, f"{check}_mask.hdr")
+        io.array2hdr(outer_src_mask, f"{check}_srcmask.hdr")
         io.carray2hdr(hdata, f"{check}_H.hdr")
         io.carray2hdr(vdata, f"{check}_V.hdr")
         io.carray2hdr(sdata, f"{check}_ND.hdr")
 
-    vms = ViewMapper(dxyz=sb_cpxyz, viewangle=45)
-    lum = blend[:, inter_src_mask].reshape(3, -1).T
+    # interpolation step 1 blend between 2-sides:
+    # elongation flips depending on x direction
+    if sb_cpxyz.ravel()[0] < 0:
+        upper = np.logical_or(ul, ll)
+    else:
+        upper = np.logical_or(ul, ur)
 
-    lp = LightPointKD(None, v[inter_src_mask.ravel()], lum, vm=vm, features=3, calcomega=False, write=False)
+    inter_src_mask_u = np.logical_and(inter_src_mask, upper)
+    inter_src_mask_l = np.logical_and(inter_src_mask, np.logical_not(upper))
+    bw2 = min(60, int(np.sum(inter_src_mask_u) * .02))
 
+    lum_u = blend[:, inter_src_mask_u].reshape(3, -1).T
+    lp_u = LightPointKD(None, v[inter_src_mask_u.ravel()], lum_u, vm=vm, features=3, calcomega=False, write=False)
+
+    lum_l = blend[:, inter_src_mask_l].reshape(3, -1).T
+    lp_l = LightPointKD(None, v[inter_src_mask_l.ravel()], lum_l, vm=vm, features=3, calcomega=False, write=False)
+
+    # extrapolate from each side
+    i_u, w_u = lp_u.interp(v[src_mask.ravel()], bw2, lum=False, angle=False, dither=False)
+    i_l, w_l = lp_l.interp(v[src_mask.ravel()], bw2, lum=False, angle=False, dither=False)
+
+    # interpolate between two sides
+    _, d_u = lp_u.query_ray(v[src_mask.ravel()])
+    _, d_l = lp_l.query_ray(v[src_mask.ravel()])
+
+    w_ul = ((d_l + 1e-9) / (d_u + d_l + 1e-9))[:, None]
+
+    clum = lp_u.apply_interp(i_u, lum_u, w_u) * w_ul + lp_l.apply_interp(i_l, lum_l, w_l) * (1 - w_ul)
+
+    # this is now a usable result, but in some cases we should assume a higher peak in the middle
+    blend[:, src_mask] = blend[:, src_mask] * (1 - outer_src_mask[src_mask][None]) + outer_src_mask[src_mask][None] * clum.T
+
+    # so... interpolation step 2: fit linear model for brightening closer to sun
     # interpolate between edge of interpolation frame and extrapolated center
-    # distance from frame to center
-    i, _ = lp.query_ray(v[src_mask.ravel()])
-    d2 = vms.radians(lp.vec[i])
 
-    # extrapolate center
+    lum = blend[:, inter_src_mask].reshape(3, -1).T
     d = vms.radians(v[inter_src_mask.ravel()])
     _, ir, rr, _, _ = stats.linregress(d, lum[:, 0])
     _, ig, rg, _, _ = stats.linregress(d, lum[:, 1])
     _, ib, rb, _, _ = stats.linregress(d, lum[:, 2])
 
-    # distance from center to pixel
-    d3 = vms.radians(v[src_mask.ravel()])
-    # scaled distance from frame to center
-    df = np.clip(d3/d2, 0, 1)[:, None]
-    rf = 1 - np.average(np.abs([(rr, rg, rb)]))
-    # weight linear extrapolation by correlation
-    df = (df + rf) / (1 + rf)
-
-    bw2 = min(60, int(np.sum(inter_src_mask) * .02 * (1 + np.all(np.abs([rr, rg, rb]) > 0.9))))
-    i, w = lp.interp(v[src_mask.ravel()], bw2, lum=False, angle=True, dither=False)
-    clum = lp.apply_interp(i, lum, w) * df + np.array([(ir, ig, ib)]) * (1-df)
-
-    blend[:, src_mask] = blend[:, src_mask] * (1 - outer_src_mask[src_mask][None]) + outer_src_mask[src_mask][None] * clum.T
+    # only do something if well correlated (negative means peak in the middle)
+    if np.min((rr, rg, rb)) < -0.5:
+        dn = bw * 1.5 * np.pi / 180
+        # distance from center to pixel
+        d3 = vms.radians(v[src_mask.ravel()])
+        # distance from center to pixel scaled by inner mask region
+        df = np.clip(d3/dn, 0, 1)[None]
+        # this is the extrapolated value at peak
+        clum = np.array([ir, ig, ib])[:, None]
+        # make sure we don't reduce the value, so take max of existing, and blend + (clum - blend) (1-df) (so we only add slope but not base)
+        # which is rearranged to: blend * df + clum * (1 - df) so that the new part can be blended in with outer_src_mask
+        blend[:, src_mask] = np.maximum(blend[:, src_mask], blend[:, src_mask] * df + clum * (1 - df) * outer_src_mask[src_mask][None])
 
     if envmap is not None:
         skyonly = np.copy(blend)

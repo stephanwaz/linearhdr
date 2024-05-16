@@ -23,7 +23,7 @@ from setuptools import find_packages, setup
 with open('README.rst') as readme_file:
     readme = readme_file.read()
 
-requirements = ['raytraverse']
+requirements = ['raytraverse', 'tifffile']
 
 setup(
     author="Stephen Wasilewski",
@@ -37,8 +37,7 @@ setup(
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
     ],
-    description="working with hdr images, numpy and coordinate transformations "
-                "for lighting simulation",
+    description="merging and managing HDR sequence images",
     python_requires=">=3.7",
     entry_points={
         'console_scripts': ['pylinearhdr=pylinearhdr.cli:main'],
@@ -50,6 +49,6 @@ setup(
     name='pylinearhdr',
     packages=find_packages(),
     url='https://github.com/stephanwaz/linearhdr',
-    version='0.0.1',
+    version='0.2.0',
     zip_safe=False,
 )

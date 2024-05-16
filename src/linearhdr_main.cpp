@@ -73,7 +73,7 @@
 using namespace std;
 
 #define PROG_NAME "linearhdr"
-#define PROG_VERSION "0.1.9 (compiled on: " __DATE__ " @ " __TIME__ ")"
+#define PROG_VERSION "0.2.0 (compiled on: " __DATE__ " @ " __TIME__ ")"
 
 FrameInfo correct_exposure(FrameInfo info) {
     FrameInfo result = {1.f, 100.f, 1.f, 1.f};
