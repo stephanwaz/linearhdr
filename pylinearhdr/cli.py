@@ -210,7 +210,8 @@ shared_run_opts = [
                       "interpolate with rawconvert (uses -interpq unless --half) or"),
     click.option("-interpq", default="DHT",
                  type=click.Choice(["linear", "VNG", "PPG", "AHD", "DCB", "DHT", "AAHD"], case_sensitive=False),
-                 help="demosaicing algorithm, only used if --interpfirst, otherwise DHT"),
+                 help="demosaicing algorithm, only used if --interpfirst, otherwise DHT, includes a median filtering"
+                      " when interpolating second by default. to disable -F is passed to -hdropts"),
     click.option("--half/--no-half", default=False,
                  help="use half-scale output from rawconvert, disables --interpsecond and --rawgrid"),
     click.option("--rawgrid/--no-rawgrid", default=False,

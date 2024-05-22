@@ -133,7 +133,9 @@ unsigned char merge(pfs::Array2D *out[],
                     const float wsp[3],
                     const float efc[3][4],
                     const bool best = false,
-                    const bool onep = false) {
+                    const bool onep = false,
+                    const bool usemax = false,
+                    const bool usemin = false) {
     int N = imgs[0]->size();
     int width = out[0]->getCols();
     int height = out[0]->getRows();
@@ -198,6 +200,8 @@ unsigned char merge(pfs::Array2D *out[],
     float ec;
     float bw = -1;
     float bv = 0.0;
+    if (usemin)
+        bv = 1e30;
     for (int n = 0; n < N; n++) {
         ec = get_exposure_compensation((*imgs[cc])[n]);
         saturation_b = saturation_a = 0.0;
@@ -219,7 +223,7 @@ unsigned char merge(pfs::Array2D *out[],
         pvalue = (*(*imgs[cc])[n].yi)(k);
         // saturation of other colors
         saturated_exp = saturation_b >= 1 - sat_off;
-        under_exp = under < blk_off;
+        under_exp = pvalue < blk_off;
 
         high = max(high, min(pvalue, wsp[cc]) / ec);
         low = min(low, pvalue / ec);
@@ -241,16 +245,23 @@ unsigned char merge(pfs::Array2D *out[],
             div += w  * ec;
             if (efc[0][0] > 0)
                 pvalue *= get_efc(i, height, (*imgs[cc])[n].exposure_time, efc);
-            (*out[cc])(k) += w * pvalue;
             // nullify poisson noise weighting (exchange with two lines above)
             // div += w;
             //(*out[cc])(k) += w * irgb[cc] / ec;
-            if (w * ec > bw) {
+            if (!best) {
+                (*out[cc])(k) += w * pvalue;
+            } else if (usemax) {
+                bv = max(bv, pvalue / ec);
+            } else if (usemin) {
+                bv = min(bv, pvalue / ec);
+            } else if (w * ec > bw) {
                 bw = w * ec;
                 bv = pvalue / ec;
             }
         }
     }
+    if ( usemin && bv > 1e29)
+        bv = 0;
     // after looping over all frames, now we can
     // correct oor values and correctly weight output for in range
     if (all_under) {
@@ -449,11 +460,16 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
                                        const bool demosaic,
                                        bool mergeeach,
                                        bool usebest,
-                                       const bool median){
+                                       const bool median,
+                                       const bool usemax,
+                                       const bool usemin,
+                                       const bool onep){
 
     // governs primary merging, do we merge all color channels, or according to CFA
     isbayer = isbayer or demosaic;
 
+    if (isbayer && !mergeeach)
+        usebest |= usemax || usemin;
     // frame size
     int width = out[0]->getCols();
     int height = out[0]->getRows();
@@ -500,7 +516,7 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
             for (int i = 0; i < height; i++)
                 for (int j = 0; j < width; j++) {
                     k = j + i * width;
-                    oor[k] = merge(out, imgs, i, j, r0, g0, blk_off, sat_off, scale, wsp, efc, usebest);
+                    oor[k] = merge(out, imgs, i, j, r0, g0, blk_off, sat_off, scale, wsp, efc, usebest, onep, usemax, usemin);
                     // track out of range
                     saturated_pixels += oor[k] == 2;
                     under_pixels += oor[k] == 1;

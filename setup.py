@@ -49,6 +49,6 @@ setup(
     name='pylinearhdr',
     packages=find_packages(),
     url='https://github.com/stephanwaz/linearhdr',
-    version='0.2.0',
+    version='0.2.1',
     zip_safe=False,
 )

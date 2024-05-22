@@ -73,7 +73,7 @@
 using namespace std;
 
 #define PROG_NAME "linearhdr"
-#define PROG_VERSION "0.2.0 (compiled on: " __DATE__ " @ " __TIME__ ")"
+#define PROG_VERSION "0.2.1 (compiled on: " __DATE__ " @ " __TIME__ ")"
 
 FrameInfo correct_exposure(FrameInfo info) {
     FrameInfo result = {1.f, 100.f, 1.f, 1.f};
@@ -95,33 +95,42 @@ void printHelp() {
     fprintf(stderr, PROG_NAME " [Options] [exposure_list]\n"
                     "Version: " PROG_VERSION "\n"
                     "Options:\n"
-                    "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.01\n"
-                    "\t[--range, -r <val>]: lower range of single raw exposure, used to set lower cutoff default=0.0,"
-                    "\n\t\tgive as value between 0 and 0.25, default=0.01\n"
-                    "\t[--tsv, -t]: output data as tsv (with header for pvalue -r)\n"
+                    "\t[--verbose, -v]\n\t[--help]\n\n"
+                    "\tInput Parameters:\n"
+                    "\t[--exact, -E]: input camera values interpreted as exact (default=True)\n"
+                    "\t[--nominal, -N]: input camera values interpreted as nominal (default=False)\n"
+                    "\t[--crop, -c <x y w h> use cropbox x and y given from upper left\n"
+                    "\t[--bayer, -B]: toggle  mosaic input (rawconvert -disinterp), default is true\n\n"
+                    "\tCorrections:\n"
                     "\t[--oor-low, -m <val>]: value to use for out of range low, default from data\n"
                     "\t[--oor-high, -x <val>]: value to use for out of range high, default from data\n"
                     "\t[--rgbs, -k '<val> <val> <val>']: rgb channel calibration default=1.0 1.0 1.0\n"
                     "\t\toverriden by RGBcalibration in header line. applies to output colorspace (after Camera2RGB in header line)\n"
                     "\t[--scale, -s <val>]: absolute scaling for hdr (eg ND filter, known response, etc.) default=1.0\n"
                     "\t[--efc, -C '<val> <val> <val> <val>']: electronic front curtain shutter correction, give as m a b c\n"
-                    "\t\t to correct on image height according to the function: y = 1/((x/c+a*t)/(1+a*t))^b where t is\n"
-                    "\t\t the (mechanical shutter) corrected exposure time. 'm' is the maximum exposure time to which these coefficients apply.\n"
-                    "\tgive multiple times, starting with the shortest maximum time, to apply up to three ranges of efcs.\n"
-                    "\t Note that if three sets are given, the last coeffs will apply to all exposure times regardless of 'm'\n"
-                    "\t t*a*x**2 + t*b*x + 1+t*c\n"
-                    "\t[--rgbe, -R]: output radiance rgbe (default)\n"
-                    "\t[--crop, -c <x y w h> use cropbox\n"
-                    "\t[--bayer, -B]: toggle  mosaic input (rawconvert -disinterp), default is true\n"
-                    "\t[--debayer, -D]: interpolate hdr output, overrides --bayer, but expects same input (rawconvert -disinterp)\n"
-                    "\t[--filter, -F]: toggle rank filter (only applies with --debayer), filters to 25th and 75th percentile of surrounding pixels. Default=true\n"
-                    "\t[--me, -M]: merge each, weight each color channel independently pixel wise\n"
+                    "\t\tto correct on image height according to the function: y = 1/((x/c+a*t)/(1+a*t))^b where t is\n"
+                    "\t\tthe (mechanical shutter) corrected exposure time. 'm' is the maximum exposure time to which these coefficients apply.\n"
+                    "\t\tgive multiple times, starting with the shortest maximum time, to apply up to three ranges of efcs.\n"
+                    "\t\tNote that if three sets are given, the last coeffs will apply to all exposure times regardless of 'm'\n"
+                    "\t\tt*a*x**2 + t*b*x + 1+t*c\n\n"
+                    "\tMerge Settings:\n"
+                    "\t[--me, -M]: merge each, weight each color channel independently pixel wise. fastest performance, but most artifacts\n"
                     "\t[--ub, -U]: use best, pick exposure with best weight instead of weighted average\n"
-                    "\t[--pfs, -P]: output pfs stream\n"
-                    "\t[--exact, -e]: input camera values interpreted as exact (default=True)\n"
-                    "\t[--nominal, -n]: input camera values interpreted as nominal (default=False)\n"
-                    "\t[--ignore, -G]: ignore all camera data, only use with single frame or all with same exposure\n"
-                    "\t[--verbose, -v]\n\t[--help]\n\n"
+                    "\t[--usemax, -Z]: use highest recorded value (only with -B and not -M) for checking consistency\n"
+                    "\t[--usemin, -Y]: use lowest recorded value (only with -B and not -M) (ignored if -Z) for checking consistency\n"
+                    "\t[--onepix, -O]: only use a one row buffer for saturation test, instead of the default 2 (only with -B and not -M)\n"
+                    "\t\tfaster performance but more artifacts\n"
+                    "\t[--saturation-offset, -o <val>]: exclude images within <val> of 1 default=0.01\n"
+                    "\t[--range, -r <val>]: lower range of single raw exposure, used to set lower cutoff default=0.0,"
+                    "\n\t\tgive as value between 0 and 0.25, default=0.01\n"
+                    "\t[--ignore, -G]: ignore all camera data, only use with single frame or all with same exposure\n\n"
+                    "\tPostprocessing:\n"
+                    "\t[--debayer, -D]: interpolate hdr output, overrides --bayer, but expects same input (rawconvert -disinterp)\n"
+                    "\t[--filter, -F]: toggle rank filter (only applies with --debayer), filters to 25th and 75th percentile of surrounding pixels. Default=true\n\n"
+                    "\tOutput:\n"
+                    "\t[--tsv, -T]: output data as tsv (with header for pvalue -r)\n"
+                    "\t[--rgbe, -R]: output radiance rgbe (default)\n"
+                    "\t[--pfs, -P]: output pfs stream\n\n"
                     "images are read from file formatted as:\n"
                     "\t<image1.tiff> <iso> <aperture> <exposure_time>\n"
                     "\t<image2.tiff> <iso> <aperture> <exposure_time>\n\t...\n\n"
@@ -153,6 +162,9 @@ void linearhdr_main(int argc, char *argv[]) {
     bool ignore = false;
     bool mergeeach = false;
     bool usebest = false;
+    bool usemax = false;
+    bool usemin = false;
+    bool onep =false;
     float oor_high = -1;
     float oor_low = -1;
     int crop[4] = {0, 0, 0, 0};
@@ -174,17 +186,17 @@ void linearhdr_main(int argc, char *argv[]) {
             {"verbose",    no_argument,       nullptr, 'v'},
             {"rgbe",    no_argument,       nullptr, 'R'},
             {"pfs",    no_argument,       nullptr, 'P'},
-            {"exact",    no_argument,       nullptr, 'e'},
+            {"exact",    no_argument,       nullptr, 'E'},
             {"bayer",    no_argument,       nullptr, 'B'},
             {"crop",    required_argument,       nullptr, 'c'},
             {"debayer",    no_argument,       nullptr, 'D'},
-            {"nominal",    no_argument,       nullptr, 'n'},
-            {"tsv", no_argument, nullptr, 't'},
+            {"nominal",    no_argument,       nullptr, 'N'},
+            {"tsv", no_argument, nullptr, 'T'},
             { "saturation-offset", required_argument, nullptr, 'o' },
             { "range", required_argument, nullptr, 'r' },
             { "scale", required_argument, nullptr, 's' },
             { "rgbs", required_argument, nullptr, 'k' },
-            { "efc", required_argument, nullptr, 'C' },
+            { "efc", required_argument, nullptr, 'e' },
             { "oor-low", required_argument, nullptr, 'm' },
             { "oor-high", required_argument, nullptr, 'x' },
             { "oob-low", required_argument, nullptr, 'm' },
@@ -193,13 +205,16 @@ void linearhdr_main(int argc, char *argv[]) {
             { "filter", no_argument, nullptr, 'F' },
             { "me", no_argument, nullptr, 'M' },
             { "ub", no_argument, nullptr, 'U' },
+            { "usemax", no_argument, nullptr, 'Z' },
+            { "usemin", no_argument, nullptr, 'Y' },
+            { "onepix", no_argument, nullptr, 'O' },
             {nullptr, 0,                         nullptr, 0}
     };
 
     std::stringstream k; //to read in multivalue arguments
     int optionIndex = 0;
     int ci = 0;
-    while ((c = getopt_long(argc, argv, "hnevutMGBFDURd:s:r:o:m:x:k:C:c:", cmdLineOptions, &optionIndex)) != -1) {
+    while ((c = getopt_long(argc, argv, "hvBDEFGMNOPRTUYZc:e:k:m:o:r:s:x:", cmdLineOptions, &optionIndex)) != -1) {
         ci++;
         if (strlen(argv[ci]) > 2 && argv[ci][1] != '-'){
             char message[100];
@@ -215,33 +230,69 @@ void linearhdr_main(int argc, char *argv[]) {
             case 'v':
                 verbose = true;
                 break;
-            case 'M':
-                mergeeach = true;
-                break;
-            case 'U':
-                usebest = true;
-                break;
-            case 'n':
-                nominal = true;
-                break;
-            case 'e':
-                nominal = false;
-                break;
             case 'B':
                 isbayer = not isbayer;
-                break;
-            case 'F':
-                median = not median;
                 break;
             case 'D':
                 demosaic = true;
                 break;
-            case 'x':
-                ci++;
-                oor_high = atof(optarg);
+            case 'E':
+                nominal = false;
+                break;
+            case 'F':
+                median = not median;
                 break;
             case 'G':
                 ignore = true;
+                break;
+            case 'M':
+                mergeeach = true;
+                break;
+            case 'N':
+                nominal = true;
+                break;
+            case 'O':
+                onep = true;
+                break;
+            case 'P':
+                rgbe = false;
+                break;
+            case 'R':
+                rgbe = true;
+                break;
+            case 'T':
+                tsv = true;
+                break;
+            case 'U':
+                usebest = true;
+                break;
+            case 'Y':
+                usemin = true;
+                break;
+            case 'Z':
+                usemax = true;
+                break;
+            case 'c':
+                ci++;
+                k.str("");
+                k.clear();
+                k << optarg;
+                k >> crop[0] >> crop[1]  >> crop[2] >> crop[3];
+                break;
+            case 'e':
+                ci++;
+                k.str("");
+                k.clear();
+                k << optarg;
+                k >> efc[efci][0] >> efc[efci][1] >> efc[efci][2] >> efc[efci][3];
+                efci++;
+                break;
+            case 'k':
+                ci++;
+                k.str("");
+                k.clear();
+                k << optarg;
+                k >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
                 break;
             case 'm':
                 ci++;
@@ -265,36 +316,9 @@ void linearhdr_main(int argc, char *argv[]) {
                 if( scale <= 0)
                     throw pfs::Exception("scale must be positive");
                 break;
-            case 'k':
+            case 'x':
                 ci++;
-                k.str("");
-                k.clear();
-                k << optarg;
-                k >> rgbcal[0] >> rgbcal[1] >> rgbcal[2];
-                break;
-            case 'C':
-                ci++;
-                k.str("");
-                k.clear();
-                k << optarg;
-                k >> efc[efci][0] >> efc[efci][1] >> efc[efci][2] >> efc[efci][3];
-                efci++;
-                break;
-            case 'c':
-                ci++;
-                k.str("");
-                k.clear();
-                k << optarg;
-                k >> crop[0] >> crop[1]  >> crop[2] >> crop[3];
-                break;
-            case 't':
-                tsv = true;
-                break;
-            case 'R':
-                rgbe = true;
-                break;
-            case 'P':
-                rgbe = false;
+                oor_high = atof(optarg);
                 break;
             default:
                 throw QuietException();
@@ -511,7 +535,7 @@ void linearhdr_main(int argc, char *argv[]) {
 
     tie(saturated_pixels, under_pixels) = linear_response(RGB_out, exposures, sat_off,
                          blk_off, scale, rgb_corr, wsp, efc,
-                         oor_high, oor_low, isbayer, demosaic, mergeeach, usebest, median);
+                         oor_high, oor_low, isbayer, demosaic, mergeeach, usebest, median, usemax, usemin, onep);
 
     if (under_pixels > 0) {
         header  << cprefix << "UNDEREXPOSED_PIXEL_CNT= " << under_pixels << endl;

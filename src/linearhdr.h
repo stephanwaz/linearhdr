@@ -94,7 +94,10 @@ std::tuple<long, long> linear_response(pfs::Array2D *out[],
                                     const bool demosaic,
                                     bool mergeeach = false,
                                     bool usebest = false,
-                                    const bool median = true);
+                                    const bool median = true,
+                                    const bool usemax = false, // only used if isbayer and not mergeeach
+                                    const bool usemin = false, // only used if isbayer and not mergeeach
+                                    const bool onep = false); // only used if isbayer and not mergeeach
 
 
 void dht_interpolate(pfs::Array2D *imgdata[], bool median = true);
