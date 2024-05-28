@@ -469,14 +469,10 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
             vdata = vdata[:, t, t]
             hdata = hdata[:, t, t]
         hdata, vdata, sdata = pool_call(imagetools.array_solid2ang, [hdata, vdata, sdata], expandarg=False, returnvm=False, pbar=False)
-    blended, skyonly, source = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw,
+    blended, skyonly, source, sbhdr = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw,
                                              envmap=envmap, sunloc=sunloc, check=check)
     vm = ViewMapper((0.0, -1.0, 0.0), viewangle=180)
-    if source is not None:
-        csp = "CENTRAL_SOURCE_PIXEL= {} {}".format(*vm.ray2pixel(source[0:3], hdata.shape[-1], False).ravel())
-        header = [sbobt, csp] + hh + hv + hs + [vm.header()]
-    else:
-        header = [sbobt] + hh + hv + [vm.header()]
+    header = [sbobt] + sbhdr + hh + hv + [vm.header()]
     io.carray2hdr(blended, outf, header, clean=True)
     if skyonly is not None:
         if source is not None:

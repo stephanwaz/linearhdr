@@ -460,10 +460,13 @@ def do_alignment(img, xo, yo, margin=0):
     return img2
 
 
-def _align_tiffs(rng, tiffs, img0):
+def _align_tiffs(rng, tiffs, img0, even=True):
     for i in rng:
         img1 = tiff.imread(tiffs[i]).T[:, ::-1]
         xo, yo = align_images(np.max(img1, axis=0), np.max(img0, axis=0), False, False)
+        if even:
+            xo = int(xo/2)*2
+            yo = int(yo/2)*2
         print(tiffs[i], xo, yo, file=sys.stderr)
         if xo != 0 or yo != 0:
             img0 = do_alignment(img1, xo, yo)
@@ -472,7 +475,7 @@ def _align_tiffs(rng, tiffs, img0):
             img0 = img1
 
 
-def align_tiffs(tiffs):
+def align_tiffs(tiffs, even=True):
     """take a list of tiff files and align starting with middle exposure"""
     t0 = int(len(tiffs) / 2)
     rngs = []
@@ -482,5 +485,5 @@ def align_tiffs(tiffs):
         rngs.append(range(t0+1, len(tiffs), 1))
     print("img alignment:", file=sys.stderr)
     img0 = tiff.imread(tiffs[t0]).T[:, ::-1]
-    pool_call(_align_tiffs, rngs, tiffs, img0, expandarg=False, pbar=False)
+    pool_call(_align_tiffs, rngs, tiffs, img0, expandarg=False, pbar=False, even=even)
     print("", file=sys.stderr)
