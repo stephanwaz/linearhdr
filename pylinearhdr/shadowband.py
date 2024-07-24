@@ -206,6 +206,7 @@ def shadowband(hdata, vdata, sdata, roh=0.0, rov=0.0, sfov=2.0, srcsize=6.7967e-
         mask = vm.in_view(v)
         src = SrcViewPoint(None, np.asarray(pxyz).reshape(-1, 3), sol_lumrgb, res=1)
         src.add_to_img(blend, v, mask, vm=vm)
+        vm = ViewMapper((0.0, -1.0, 0.0), viewangle=180)
         header.append("CENTRAL_SOURCE_PIXEL= {} {}".format(*vm.ray2pixel(source[0:3], hdata.shape[-1], False).ravel()))
     else:
         source = None

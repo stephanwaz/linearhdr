@@ -472,7 +472,7 @@ def shadowband(ctx, imgh, imgv, imgn, outf="blended.hdr", roh=0.0, rov=0.0, sfov
     blended, skyonly, source, sbhdr = sb.shadowband(hdata, vdata, sdata, roh=roh, rov=rov, sfov=sfov, srcsize=srcsize, bw=bw,
                                              envmap=envmap, sunloc=sunloc, check=check)
     vm = ViewMapper((0.0, -1.0, 0.0), viewangle=180)
-    header = [sbobt] + sbhdr + hh + hv + [vm.header()]
+    header = [sbobt] + sbhdr + hh + hv + hs + [vm.header()]
     io.carray2hdr(blended, outf, header, clean=True)
     if skyonly is not None:
         if source is not None:
@@ -560,8 +560,9 @@ def sort(ctx, imgs, out="img", starti=0, ascend=True, preview=False, r=False, co
 @click.option("--aperture/--no-aperture", default=True, help="name by aperture")
 @click.option("--iso/--no-iso", default=False, help="name by iso")
 @click.option("--shutter/--no-shutter", default=True, help="name by shutter")
+@click.option("--preview/--no-preview", default=False, help="don't move or copy, just preview")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def rename(ctx, imgs, out=None, copy=True, aperture=True, shutter=True, iso=False, **kwargs):
+def rename(ctx, imgs, out=None, copy=True, aperture=True, shutter=True, iso=False, preview=False, **kwargs):
     """rename raw files based on ISO_APERTURE_SHUTTER"""
     infos = pool_call(pl.name_by_exif, imgs, expandarg=False, prefix=out, pbar=False, aperture=aperture, shutter=shutter, iso=iso)
     copied = []
@@ -572,7 +573,9 @@ def rename(ctx, imgs, out=None, copy=True, aperture=True, shutter=True, iso=Fals
             dest2 = dest.rsplit(".", 1)
             dest2 = "{}_{:02d}.{}".format(dest2[0], i, dest2[1])
             i += 1
-        if copy:
+        if preview:
+            print(f"{orig} -> {dest2}", file=sys.stderr)
+        elif copy:
             shutil.copy(orig, dest2)
         else:
             shutil.move(orig, dest2)
@@ -629,11 +632,12 @@ def vignette(ctx, img, vfile=None, **kwargs):
                    "should be consistently lit, color neutral and in range for all images in -seq. will duplicate last"
                    "-crop when there are fewer than -seq. if not given at all, uses full image (not recommended)")
 @click.option("-runopts", default="", help="passed to pylinearhdr run")
+@click.option("-hdropts", default="", help="passed to linearhdr")
 @click.option("-channel", default="g", help="which color channel to use")
 @click.option("-dataout",
               help="if given, save full data to this file")
 @clk.shared_decs(clk.command_decs(pylinearhdr.__version__, wrap=True))
-def shutter(ctx, seq=None, crop=None, runopts="", dataout=None, channel='g', **kwargs):
+def shutter(ctx, seq=None, crop=None, runopts="", hdropts="", dataout=None, channel='g', **kwargs):
     """do relative shutter speed calibration
 
     When multiple sequences are given, they are sorted by the
@@ -664,7 +668,7 @@ def shutter(ctx, seq=None, crop=None, runopts="", dataout=None, channel='g', **k
             croparg = ""
         else:
             croparg = f"-crop '{crop[j]}'"
-        result = pool_call(cl.average_channel, sq, croparg, runopts=runopts, expandarg=False, channel=channel)
+        result = pool_call(cl.average_channel, sq, croparg, runopts=runopts, hdropts=hdropts, expandarg=False, channel=channel)
         # filter out of range
         result = np.array([[j[0], j[2]] for j in result if j[3] > 0.99])
         print(f"sequence {i}: {len(result)} out of {len(sq)} frames in range", file=sys.stderr)

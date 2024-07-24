@@ -438,7 +438,7 @@ def load_test_cells_simul(img1, img2):
     return cells1, cells2
 
 
-def average_channel(img, croparg, runopts="", channel="g"):
+def average_channel(img, croparg, runopts="", hdropts="", channel="g"):
     """return average green value and fraction in range for a single frame and crop area"""
     chdict = dict(r=1, g=2, b=3)
     gf = [0, 4, 2, 4]
@@ -446,7 +446,7 @@ def average_channel(img, croparg, runopts="", channel="g"):
         channel =chdict[channel[0].lower()]
     else:
         channel = int(channel + 1)
-    runcom = [f"pylinearhdr run {runopts} -colorspace raw -hdropts ' -m 0 -x 0 --tsv' --rawgrid {croparg} '{img}'",
+    runcom = [f"pylinearhdr run {runopts} -colorspace raw -hdropts ' {hdropts} -m 0 -x 0 --tsv' --rawgrid {croparg} '{img}'",
               "getinfo -d -", f"rcalc -e '$1=${channel};$2=1;$3=if(${channel},1,0)'", "total", f"rcalc -w -e '$1=$1/$3;$2=$3/$2*{gf[channel]}'"]
     info = list(pl.info_from_exif(img.split()[0], True, False))
     result = [float(i) for i in pipeline(runcom).strip().split()]
