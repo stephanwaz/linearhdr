@@ -55,7 +55,8 @@
 //#include <internal/dmp_include.h>
 #include <cmath>  //for sqrt()
 #include <pfs.h> //use pfs::array instead in libraw.imgdata
-#include <iostream>
+#include <algorithm>
+
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
