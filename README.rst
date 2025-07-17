@@ -29,6 +29,16 @@ First, clone this pacakge and LibRaw as a submodule::
         git checkout 0.21.1
         cd ..
 
+Then install pylinearhdr (recommend creating a virtual environment and using pip, or other package manager such as conda)::
+
+    pip3 install .
+
+If you have trouble installing do to issues with a package named craytraverse, you can
+install from the nosb branch::
+
+    git fetch origin
+    git switch nosb
+
 Then build c++ code command line tools called by pylinearhdr (linearhdr, rawconvert).
 From a command line in this directory::
 
@@ -40,9 +50,7 @@ From a command line in this directory::
 
 make sure that your install location is in you $PATH.
 
-Then install pylinearhdr (recommend creating a virtual environment and using pip, or other package manager such as conda)::
 
-    pip3 install .
 
 Upgrading
 ---------
