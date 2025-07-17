@@ -17,6 +17,6 @@
 __author__ = """Stephen Wasilewski"""
 __email__ = 'stephanwaz@gmail.com'
 __version__ = '0.2.1'
-__all__ = ['shadowband', 'pylinearhdr', 'calibrate']
+__all__ = ['pylinearhdr', 'calibrate']
 
-from pylinearhdr import shadowband, pylinearhdr, calibrate
+from pylinearhdr import pylinearhdr, calibrate

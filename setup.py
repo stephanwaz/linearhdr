@@ -23,7 +23,7 @@ from setuptools import find_packages, setup
 with open('README.rst') as readme_file:
     readme = readme_file.read()
 
-requirements = ['raytraverse', 'tifffile']
+requirements = ['tifffile']
 
 setup(
     author="Stephen Wasilewski",
